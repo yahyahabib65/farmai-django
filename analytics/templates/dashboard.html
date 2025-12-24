@@ -1,0 +1,1652 @@
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FarmAI - My Farm Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <!-- Chart.js for time series graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --green-dark: #1b5e20;
+            --green-main: #2e7d32;
+            --green-light: #4caf50;
+            --orange: #f57c00;
+            --blue: #1976d2;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(180deg, #f0f7f0 0%, #e8f5e9 100%);
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, var(--green-dark), var(--green-main));
+            padding: 1rem;
+        }
+
+        .navbar-brand {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: white !important;
+        }
+
+        .nav-link {
+            color: rgba(255,255,255,0.9) !important;
+            font-weight: 500;
+            margin: 0 0.5rem;
+        }
+
+        .nav-link:hover { color: white !important; }
+
+        .hero {
+            background: linear-gradient(135deg, var(--green-main), var(--green-light));
+            color: white;
+            padding: 2.5rem 0;
+            margin-bottom: 2rem;
+        }
+
+        .hero h1 { font-weight: 700; }
+
+        .stat-card {
+            background: white;
+            border-radius: 20px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            height: 100%;
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+        }
+
+        .stat-icon {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            font-size: 2rem;
+        }
+
+        .stat-icon.green { background: #e8f5e9; color: var(--green-main); }
+        .stat-icon.blue { background: #e3f2fd; color: var(--blue); }
+        .stat-icon.orange { background: #fff3e0; color: var(--orange); }
+
+        .stat-value { font-size: 2.5rem; font-weight: 700; color: #333; }
+        .stat-label { color: #666; font-size: 1rem; }
+
+        .card {
+            border: none;
+            border-radius: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 2px solid #f0f0f0;
+            padding: 1.25rem 1.5rem;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .card-header i { color: var(--green-main); margin-right: 0.5rem; }
+
+        .card-body { padding: 1.5rem; }
+
+        /* AI Analytics Section */
+        .ai-card {
+            background: linear-gradient(135deg, #fff 0%, #f1f8e9 100%);
+            border: 3px solid var(--green-light);
+        }
+
+        .ai-card .card-header {
+            background: linear-gradient(135deg, var(--green-main), var(--green-light));
+            color: white;
+        }
+
+        .ai-card .card-header i { color: white; }
+
+        .btn-analyze {
+            background: linear-gradient(135deg, var(--green-main), var(--green-light));
+            border: none;
+            color: white;
+            padding: 1rem 2rem;
+            font-size: 1.2rem;
+            font-weight: 600;
+            border-radius: 15px;
+            width: 100%;
+        }
+
+        .btn-analyze:hover {
+            background: linear-gradient(135deg, var(--green-dark), var(--green-main));
+            color: white;
+            transform: scale(1.02);
+        }
+
+        .btn-analyze:disabled {
+            background: #ccc;
+            transform: none;
+        }
+
+        .form-select, .form-control {
+            border-radius: 12px;
+            padding: 0.875rem 1rem;
+            border: 2px solid #e0e0e0;
+        }
+
+        .form-select:focus, .form-control:focus {
+            border-color: var(--green-light);
+            box-shadow: 0 0 0 3px rgba(76,175,80,0.2);
+        }
+
+        /* Results */
+        .results-area {
+            background: #fafafa;
+            border-radius: 15px;
+            min-height: 300px;
+            padding: 1.5rem;
+        }
+
+        .result-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 5px solid var(--green-main);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        .result-card.warning { border-left-color: var(--orange); }
+        .result-card.danger { border-left-color: #c62828; }
+
+        .health-badge {
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+
+        .health-badge.green { background: #e8f5e9; color: var(--green-main); }
+        .health-badge.yellow { background: #fff8e1; color: #f9a825; }
+        .health-badge.red { background: #ffebee; color: #c62828; }
+
+        /* Upload Section */
+        .upload-card {
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .upload-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            font-size: 2.5rem;
+        }
+
+        .upload-icon.satellite { background: #e3f2fd; color: var(--blue); }
+        .upload-icon.drone { background: #fff3e0; color: var(--orange); }
+
+        .upload-zone {
+            border: 3px dashed #ccc;
+            border-radius: 15px;
+            padding: 2rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .upload-zone:hover {
+            border-color: var(--green-light);
+            background: #f1f8e9;
+        }
+
+        .btn-upload {
+            background: var(--green-main);
+            color: white;
+            border: none;
+            padding: 0.75rem 2rem;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+
+        .btn-upload:hover {
+            background: var(--green-dark);
+            color: white;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+
+        /* Loading Animation */
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #fff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Toast */
+        .toast-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            color: white;
+            font-weight: 500;
+            z-index: 9999;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast-notification.success { background: var(--green-main); }
+        .toast-notification.error { background: #c62828; }
+        .toast-notification.warning { background: var(--orange); }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-tree-fill me-2"></i>FarmAI
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/analytics/dashboard/">
+                            <i class="bi bi-house-door me-1"></i> Home
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/admin/">
+                            <i class="bi bi-gear me-1"></i> Settings
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <div class="hero">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h1><i class="bi bi-bar-chart-fill me-2"></i>My Farm Dashboard</h1>
+                    <p class="mb-0 opacity-75">Check your crop health and get smart farming recommendations</p>
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <span class="badge bg-light text-dark px-3 py-2 fs-6">
+                        <i class="bi bi-calendar3 me-1"></i> Today: {{ "now"|date:"M d, Y" }}
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Quick Stats -->
+        <div class="row mb-4">
+            <div class="col-md-4 mb-3">
+                <div class="stat-card">
+                    <div class="stat-icon green">
+                        <i class="bi bi-geo-alt-fill"></i>
+                    </div>
+                    <div class="stat-value">{{ farms|length|default:"0" }}</div>
+                    <div class="stat-label">My Farms</div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-3">
+                <div class="stat-card">
+                    <div class="stat-icon blue">
+                        <i class="bi bi-grid-3x3-gap-fill"></i>
+                    </div>
+                    <div class="stat-value">{{ fields_count|default:"0" }}</div>
+                    <div class="stat-label">Fields</div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-3">
+                <div class="stat-card">
+                    <div class="stat-icon orange">
+                        <i class="bi bi-cpu-fill"></i>
+                    </div>
+                    <div class="stat-value">{{ devices_count|default:"0" }}</div>
+                    <div class="stat-label">Sensors</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Analytics - Main Feature -->
+        <div class="card ai-card mb-4">
+            <div class="card-header d-flex align-items-center">
+                <i class="bi bi-robot fs-4"></i>
+                <span class="ms-2 fs-5">🌾 AI Crop Health Analysis</span>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <!-- Controls -->
+                    <div class="col-lg-4 mb-4 mb-lg-0">
+                        <h5 class="mb-3"><i class="bi bi-sliders2 text-success me-2"></i>Select Your Farm</h5>
+                        
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">Choose Farm:</label>
+                            <select id="farmSelect" class="form-select form-select-lg">
+                                {% if farms %}
+                                    {% for farm in farms %}
+                                    <option value="{{ farm.id }}">{{ farm.name }}</option>
+                                    {% endfor %}
+                                {% else %}
+                                    <option value="">No farms yet - Add one in Settings</option>
+                                {% endif %}
+                            </select>
+                        </div>
+
+                        <!-- Time Parameters -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">📅 Analysis Period:</label>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <label class="form-label small text-muted">Start Date</label>
+                                    <input type="date" class="form-control" id="startDate">
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small text-muted">End Date</label>
+                                    <input type="date" class="form-control" id="endDate">
+                                </div>
+                            </div>
+                            <small class="text-muted">Leave blank for latest available imagery</small>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">Analysis Type:</label>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="checkNdvi" checked>
+                                <label class="form-check-label" for="checkNdvi">
+                                    🌿 <strong>Crop Health</strong> (NDVI)
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="checkNdwi" checked>
+                                <label class="form-check-label" for="checkNdwi">
+                                    💧 <strong>Water Level</strong> (NDWI)
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Download option -->
+                        <div class="mb-4">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="checkAutoDownload" checked>
+                                <label class="form-check-label" for="checkAutoDownload">
+                                    🛰️ <strong>Auto-download</strong> satellite imagery if not available
+                                </label>
+                            </div>
+                        </div>
+
+                        <button type="button" class="btn btn-analyze" onclick="runAnalysis()" id="analyzeBtn">
+                            <i class="bi bi-play-fill me-2"></i>
+                            <span id="btnText">Analyze My Farm</span>
+                        </button>
+                    </div>
+
+                    <!-- Results -->
+                    <div class="col-lg-8">
+                        <h5 class="mb-3"><i class="bi bi-clipboard-data text-success me-2"></i>Analysis Results</h5>
+                        <div class="results-area" id="resultsArea">
+                            <div class="text-center text-muted py-5">
+                                <i class="bi bi-graph-up-arrow" style="font-size: 4rem; opacity: 0.3;"></i>
+                                <h5 class="mt-3">Ready to Analyze</h5>
+                                <p>Select your farm and click "Analyze My Farm" to see crop health results</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Satellite Image Gallery Section -->
+        <h4 class="mb-3"><i class="bi bi-images text-success me-2"></i>Stored Satellite Imagery</h4>
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <span class="text-muted">Images from Planetary Computer & MinIO</span>
+                    </div>
+                    <button class="btn btn-sm btn-outline-success" onclick="loadSatelliteImages()">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                    </button>
+                </div>
+                <div id="satelliteGallery" class="row g-3">
+                    <div class="col-12 text-center py-4">
+                        <i class="bi bi-images text-muted" style="font-size: 3rem; opacity: 0.3;"></i>
+                        <p class="text-muted mt-2">Click "Refresh" to load available satellite images</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Image Upload Section -->
+        <h4 class="mb-3"><i class="bi bi-cloud-upload text-success me-2"></i>Upload Farm Images</h4>
+        <div class="row mb-4">
+            <div class="col-md-6 mb-3">
+                <div class="card upload-card h-100">
+                    <div class="upload-icon satellite">
+                        <i class="bi bi-globe-americas"></i>
+                    </div>
+                    <h5>Satellite Images</h5>
+                    <p class="text-muted">Upload satellite photos of your farm</p>
+                    <form id="satelliteForm" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        <div class="upload-zone mb-3" onclick="document.getElementById('satelliteFile').click()">
+                            <i class="bi bi-cloud-arrow-up text-success" style="font-size: 2rem;"></i>
+                            <p class="mb-0 mt-2">Click to select image</p>
+                            <small class="text-muted">Supports: .tif, .jpg, .png</small>
+                            <input type="file" id="satelliteFile" name="file" accept=".tif,.tiff,.jpg,.jpeg,.png" hidden onchange="showFile(this, 'satFileName')">
+                        </div>
+                        <p id="satFileName" class="text-success fw-bold mb-2"></p>
+                        <button type="button" class="btn btn-upload" onclick="uploadSatellite()">
+                            <i class="bi bi-upload me-2"></i>Upload
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <div class="col-md-6 mb-3">
+                <div class="card upload-card h-100">
+                    <div class="upload-icon drone">
+                        <i class="bi bi-airplane"></i>
+                    </div>
+                    <h5>Drone Images</h5>
+                    <p class="text-muted">Upload drone photos of your fields</p>
+                    <form id="droneForm" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        <div class="upload-zone mb-3" onclick="document.getElementById('droneFile').click()">
+                            <i class="bi bi-cloud-arrow-up text-success" style="font-size: 2rem;"></i>
+                            <p class="mb-0 mt-2">Click to select image</p>
+                            <small class="text-muted">Supports: .tif, .jpg, .png</small>
+                            <input type="file" id="droneFile" name="file" accept=".tif,.tiff,.jpg,.jpeg,.png" hidden onchange="showFile(this, 'droneFileName')">
+                        </div>
+                        <p id="droneFileName" class="text-success fw-bold mb-2"></p>
+                        <button type="button" class="btn btn-upload" onclick="uploadDrone()">
+                            <i class="bi bi-upload me-2"></i>Upload
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- IoT Sensor Data Section -->
+        <h4 class="mb-3"><i class="bi bi-cpu-fill text-success me-2"></i>IoT Sensor Time Series</h4>
+        
+        <!-- IoT Time Series Chart - Primary Focus -->
+        <div class="card border-0 shadow-sm mb-4" id="iotChartCard">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span>
+                    <i class="bi bi-graph-up text-success me-2"></i>
+                    Sensor Readings Over Time
+                </span>
+                <div>
+                    <select id="chartDays" class="form-select form-select-sm d-inline-block" style="width: auto;" onchange="loadSensorChart()">
+                        <option value="1">Last 24 hours</option>
+                        <option value="7" selected>Last 7 days</option>
+                        <option value="14">Last 14 days</option>
+                        <option value="30">Last 30 days</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="syncThingsBoard()">
+                        <i class="bi bi-cloud-arrow-down me-1"></i>Sync ThingsBoard
+                    </button>
+                    <button class="btn btn-sm btn-outline-success ms-1" onclick="loadIoTData()">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="chartLoader" class="text-center py-4" style="display: none;">
+                    <div class="spinner-border text-success" role="status"></div>
+                    <p class="text-muted mt-2">Loading time series data...</p>
+                </div>
+                <div id="chartNoData" class="text-center py-4" style="display: none;">
+                    <i class="bi bi-graph-up text-muted" style="font-size: 3rem; opacity: 0.3;"></i>
+                    <p class="text-muted mt-2">No time series data available yet. Click "Sync ThingsBoard" to pull data.</p>
+                </div>
+                <canvas id="sensorChart" height="200"></canvas>
+            </div>
+        </div>
+        
+        <!-- Quick Stats Row -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <span class="text-muted">Sensor Summary</span>
+                    </div>
+                </div>
+                
+                <!-- IoT Stats -->
+                <div id="iotDataArea" class="row g-3">
+                    <div class="col-12 text-center py-4">
+                        <i class="bi bi-cpu text-muted" style="font-size: 3rem; opacity: 0.3;"></i>
+                        <p class="text-muted mt-2">Loading sensor stats...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <i class="bi bi-tree-fill text-success me-2"></i>
+        FarmAI - Smart Farming Made Simple
+    </div>
+
+    <script>
+        // Show file name when selected
+        function showFile(input, displayId) {
+            const display = document.getElementById(displayId);
+            if (input.files && input.files[0]) {
+                display.textContent = '📄 ' + input.files[0].name;
+            }
+        }
+
+        // Show toast notification
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast-notification ${type}`;
+            toast.innerHTML = `<i class="bi bi-${type === 'success' ? 'check-circle' : type === 'error' ? 'x-circle' : 'exclamation-triangle'} me-2"></i>${message}`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        // Get CSRF token
+        function getCsrfToken() {
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                const [name, value] = cookie.trim().split('=');
+                if (name === 'csrftoken') return value;
+            }
+            return '';
+        }
+
+        // Run AI Analysis
+        function runAnalysis() {
+            const farmSelect = document.getElementById('farmSelect');
+            const farmId = farmSelect.value;
+            const btn = document.getElementById('analyzeBtn');
+            const btnText = document.getElementById('btnText');
+            const resultsArea = document.getElementById('resultsArea');
+            const runNdvi = document.getElementById('checkNdvi').checked;
+            const runNdwi = document.getElementById('checkNdwi').checked;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const autoDownload = document.getElementById('checkAutoDownload').checked;
+
+            if (!farmId) {
+                showToast('Please add a farm first in Settings', 'warning');
+                return;
+            }
+
+            // Show loading
+            btn.disabled = true;
+            btnText.innerHTML = '<span class="loading-spinner me-2"></span>Analyzing...';
+            resultsArea.innerHTML = `
+                <div class="text-center py-5">
+                    <div class="spinner-border text-success" style="width: 3rem; height: 3rem;"></div>
+                    <h5 class="mt-3">Analyzing your farm...</h5>
+                    <p class="text-muted">${autoDownload ? 'Downloading satellite imagery if needed...' : 'Using existing imagery...'}</p>
+                </div>
+            `;
+
+            // Build request body with time parameters
+            const requestBody = {
+                farm_id: farmId,
+                run_ndvi: runNdvi,
+                run_ndwi: runNdwi,
+                auto_download: autoDownload
+            };
+            
+            if (startDate) requestBody.start_date = startDate;
+            if (endDate) requestBody.end_date = endDate;
+
+            // Make API call
+            fetch('/api/analytics/run/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify(requestBody)
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.disabled = false;
+                btnText.innerHTML = '<i class="bi bi-play-fill me-2"></i>Analyze My Farm';
+
+                if (data.error) {
+                    resultsArea.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            ${data.error}
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Build satellite imagery status message
+                let satelliteStatus = '';
+                if (data.planetary_computer) {
+                    const pc = data.planetary_computer;
+                    const dateFilter = pc.date_filter ? 
+                        `<br><small>📅 Date Filter: ${pc.date_filter.start || 'Any'} → ${pc.date_filter.end || 'Latest'}</small>` : '';
+                    
+                    if (pc.status && pc.status.includes('Newly downloaded')) {
+                        satelliteStatus = `
+                            <div class="alert alert-success py-2 mb-3">
+                                <i class="bi bi-cloud-download me-2"></i>
+                                <strong>🛰️ Sentinel Imagery Downloaded!</strong>
+                                <br><small>Source: ${pc.source || 'Planetary Computer'}</small>
+                                <br><small>Image Date: ${pc.image_date || 'N/A'} | Cloud Cover: ${pc.cloud_cover || 'N/A'}</small>
+                                ${dateFilter}
+                                ${pc.minio_storage && pc.minio_storage.length > 0 ? `<br><small>📦 Stored in MinIO: ${pc.minio_storage.length} bands</small>` : ''}
+                            </div>
+                        `;
+                    } else if (pc.status && (pc.status.includes('existing') || pc.status.includes('Using'))) {
+                        satelliteStatus = `
+                            <div class="alert alert-info py-2 mb-3">
+                                <i class="bi bi-folder-check me-2"></i>
+                                <strong>🛰️ Using Existing Sentinel Imagery</strong>
+                                <br><small>${pc.status}</small>
+                                <br><small>Image Date: <strong>${pc.image_date || 'N/A'}</strong></small>
+                                ${dateFilter}
+                                ${pc.bands_available ? `<br><small>📊 ${pc.bands_available} spectral bands available</small>` : ''}
+                                ${pc.available_dates && pc.available_dates.length > 1 ? `<br><small>📅 ${pc.available_dates.length} dates in storage: ${pc.available_dates.slice(0,3).join(', ')}${pc.available_dates.length > 3 ? '...' : ''}</small>` : ''}
+                            </div>
+                        `;
+                    } else if (pc.status && (pc.status.includes('disabled') || pc.status.includes('No imagery'))) {
+                        satelliteStatus = `
+                            <div class="alert alert-warning py-2 mb-3">
+                                <i class="bi bi-cloud-slash me-2"></i>
+                                <strong>⚠️ No Sentinel Imagery Found</strong>
+                                <br><small>${pc.status}</small>
+                                ${dateFilter}
+                                <br><small>💡 ${pc.tip || 'Try a different date range or enable auto-download.'}</small>
+                            </div>
+                        `;
+                    } else if (pc.status && pc.status.includes('No Sentinel images')) {
+                        satelliteStatus = `
+                            <div class="alert alert-warning py-2 mb-3">
+                                <i class="bi bi-calendar-x me-2"></i>
+                                <strong>⚠️ No Images for Date Range</strong>
+                                <br><small>${pc.status}</small>
+                                ${dateFilter}
+                                <br><small>💡 ${pc.tip || 'Try expanding the date range.'}</small>
+                            </div>
+                        `;
+                    } else if (pc.source === 'Local Upload') {
+                        satelliteStatus = `
+                            <div class="alert alert-info py-2 mb-3">
+                                <i class="bi bi-upload me-2"></i>
+                                <strong>📤 Using Uploaded Image</strong>
+                                <br><small>${pc.status}</small>
+                                <br><small>Image Date: ${pc.image_date || 'N/A'}</small>
+                            </div>
+                        `;
+                    }
+                } else if (!data.image_processed) {
+                    satelliteStatus = `
+                        <div class="alert alert-secondary py-2 mb-3">
+                            <i class="bi bi-image me-2"></i>
+                            <strong>No Satellite Imagery</strong>
+                            <br><small>Using simulated data. Upload images or enable auto-download for real analysis.</small>
+                        </div>
+                    `;
+                }
+
+                // Build results HTML
+                let html = satelliteStatus + `
+                    <div class="alert ${data.image_processed ? 'alert-success' : 'alert-info'} mb-3">
+                        <i class="bi bi-${data.image_processed ? 'check-circle' : 'info-circle'} me-2"></i>
+                        <strong>Analysis Complete!</strong> - ${data.farm_name} (${data.analysis_date})
+                        ${data.image_processed ? `<br><small>📷 Processed: ${data.image_source} - ${data.image_file || ''}</small>` : '<br><small>ℹ️ Upload images for real NDVI calculations</small>'}
+                    </div>
+                    
+                    <!-- Summary Stats -->
+                    <div class="row mb-4">
+                        <div class="col-6 col-md-3 mb-2">
+                            <div class="bg-white rounded p-3 text-center border">
+                                <div class="fs-3 fw-bold text-success">${data.summary.avg_ndvi}</div>
+                                <small class="text-muted">Crop Health (NDVI)</small>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 mb-2">
+                            <div class="bg-white rounded p-3 text-center border">
+                                <div class="fs-3 fw-bold text-primary">${data.summary.avg_ndwi}</div>
+                                <small class="text-muted">Water Level (NDWI)</small>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 mb-2">
+                            <div class="bg-white rounded p-3 text-center border">
+                                <div class="fs-3 fw-bold text-success">${data.summary.healthy_fields}</div>
+                                <small class="text-muted">Healthy Fields</small>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 mb-2">
+                            <div class="bg-white rounded p-3 text-center border">
+                                <div class="fs-3 fw-bold ${data.summary.attention_needed > 0 ? 'text-warning' : 'text-success'}">${data.summary.attention_needed}</div>
+                                <small class="text-muted">Need Attention</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Tabs -->
+                    <ul class="nav nav-pills nav-fill mb-3" role="tablist">
+                        <li class="nav-item"><a class="nav-link active" data-bs-toggle="pill" href="#fieldsTab">🌾 Fields</a></li>
+                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#chartsTab">📈 Graphs</a></li>
+                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#rawTab">🔬 Raw Data</a></li>
+                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#harvestTab">📅 Harvest</a></li>
+                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#weatherTab">🌤️ Weather</a></li>
+                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#carbonTab">🌱 Carbon</a></li>
+                    </ul>
+
+                    <div class="tab-content">
+                        <!-- Fields Tab -->
+                        <div class="tab-pane fade show active" id="fieldsTab">
+                            <h6 class="mb-3"><i class="bi bi-grid-3x3 text-success me-2"></i>Field Details:</h6>
+                `;
+
+                data.results.forEach(result => {
+                    const cardClass = result.health_color === 'red' ? 'danger' : (result.health_color === 'yellow' ? 'warning' : '');
+                    html += `
+                        <div class="result-card ${cardClass}">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div>
+                                    <strong>${result.field_name}</strong>
+                                    <br><small class="text-muted">${result.crop_type} - ${result.growth_stage || 'Growing'}</small>
+                                </div>
+                                <span class="health-badge ${result.health_color}">${result.health_status}</span>
+                            </div>
+                            <div class="row mb-2">
+                                <div class="col-4">
+                                    <small class="text-muted">🌿 Health:</small>
+                                    <strong class="ms-1">${result.ndvi || 'N/A'}</strong>
+                                </div>
+                                <div class="col-4">
+                                    <small class="text-muted">💧 Water:</small>
+                                    <strong class="ms-1">${result.ndwi || 'N/A'}</strong>
+                                </div>
+                                <div class="col-4">
+                                    <small class="text-muted">📅 Harvest:</small>
+                                    <strong class="ms-1">${result.days_to_harvest || '--'} days</strong>
+                                </div>
+                            </div>
+                            <div class="bg-light rounded p-2">
+                                <small><i class="bi bi-lightbulb text-warning me-1"></i> <strong>Tip:</strong> ${result.recommendation}</small>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += `</div>`;
+
+                // Charts/Graphs Tab - Time Series
+                html += `
+                    <div class="tab-pane fade" id="chartsTab">
+                        <h6 class="mb-3"><i class="bi bi-graph-up text-success me-2"></i>NDVI/NDWI Time Series:</h6>
+                        <div class="bg-white rounded p-3 border mb-3">
+                            <canvas id="ndviChart" height="200"></canvas>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="bg-light rounded p-3">
+                                    <h6 class="text-success"><i class="bi bi-tree me-2"></i>NDVI (Crop Health Index)</h6>
+                                    <small class="text-muted">
+                                        <strong>Formula:</strong> NDVI = (NIR - RED) / (NIR + RED)<br>
+                                        <strong>Range:</strong> -1 to +1<br>
+                                        <strong>Healthy crops:</strong> 0.4 to 0.9<br>
+                                        <strong>Bare soil:</strong> 0 to 0.2
+                                    </small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="bg-light rounded p-3">
+                                    <h6 class="text-primary"><i class="bi bi-droplet me-2"></i>NDWI (Water Index)</h6>
+                                    <small class="text-muted">
+                                        <strong>Formula:</strong> NDWI = (GREEN - NIR) / (GREEN + NIR)<br>
+                                        <strong>Range:</strong> -1 to +1<br>
+                                        <strong>High water:</strong> > 0.3<br>
+                                        <strong>Low water:</strong> < 0
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                // Raw Calculations Tab
+                html += `
+                    <div class="tab-pane fade" id="rawTab">
+                        <h6 class="mb-3"><i class="bi bi-code-square text-primary me-2"></i>Raw NDVI/NDWI Calculations:</h6>
+                `;
+                
+                if (data.raw_calculations && data.raw_calculations.length > 0) {
+                    data.raw_calculations.forEach(calc => {
+                        if (calc.ndvi_mean !== undefined) {
+                            html += `
+                                <div class="bg-white rounded p-3 border mb-3">
+                                    <h6 class="text-success mb-3"><i class="bi bi-image me-2"></i>Image: ${calc.image}</h6>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <table class="table table-sm table-bordered">
+                                                <thead class="table-success">
+                                                    <tr><th colspan="2">NDVI Statistics</th></tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr><td>Mean</td><td><strong>${calc.ndvi_mean}</strong></td></tr>
+                                                    <tr><td>Min</td><td>${calc.ndvi_min}</td></tr>
+                                                    <tr><td>Max</td><td>${calc.ndvi_max}</td></tr>
+                                                    <tr><td>Std Dev</td><td>${calc.ndvi_std}</td></tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <table class="table table-sm table-bordered">
+                                                <thead class="table-primary">
+                                                    <tr><th colspan="2">NDWI Statistics</th></tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr><td>Mean</td><td><strong>${calc.ndwi_mean}</strong></td></tr>
+                                                    <tr><td>Min</td><td>${calc.ndwi_min}</td></tr>
+                                                    <tr><td>Max</td><td>${calc.ndwi_max}</td></tr>
+                                                    <tr><td>Std Dev</td><td>${calc.ndwi_std}</td></tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                    <div class="row mt-2">
+                                        <div class="col-md-4">
+                                            <div class="text-center p-2 bg-success bg-opacity-10 rounded">
+                                                <small class="text-muted">Healthy Pixels</small>
+                                                <div class="fs-4 text-success fw-bold">${calc.healthy_pixels_pct}%</div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="text-center p-2 bg-warning bg-opacity-10 rounded">
+                                                <small class="text-muted">Stressed Pixels</small>
+                                                <div class="fs-4 text-warning fw-bold">${calc.stressed_pixels_pct}%</div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="text-center p-2 bg-secondary bg-opacity-10 rounded">
+                                                <small class="text-muted">Bare Soil</small>
+                                                <div class="fs-4 text-secondary fw-bold">${calc.bare_soil_pct}%</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-3 p-2 bg-light rounded">
+                                        <small><strong>📊 Pixels Analyzed:</strong> ${calc.pixel_count?.toLocaleString() || 'N/A'}</small><br>
+                                        <small><strong>🔢 Method:</strong> ${calc.calculation_method}</small><br>
+                                        <small><strong>🕐 Processed:</strong> ${calc.processed_at}</small>
+                                    </div>
+                                </div>
+                            `;
+                        } else {
+                            html += `
+                                <div class="alert alert-info">
+                                    <i class="bi bi-info-circle me-2"></i>
+                                    <strong>${calc.note || 'Sample data shown'}</strong><br>
+                                    <small>${calc.calculation_method}</small><br>
+                                    <small>${calc.upload_instruction}</small>
+                                </div>
+                            `;
+                        }
+                    });
+                }
+                html += `</div>`;
+
+                // Harvest Predictions Tab
+                html += `
+                    <div class="tab-pane fade" id="harvestTab">
+                        <h6 class="mb-3"><i class="bi bi-calendar-check text-success me-2"></i>Harvest Predictions:</h6>
+                `;
+                
+                if (data.harvest_predictions && data.harvest_predictions.length > 0) {
+                    data.harvest_predictions.forEach(pred => {
+                        html += `
+                            <div class="bg-white rounded p-3 mb-2 border-start border-4 border-success">
+                                <div class="d-flex justify-content-between">
+                                    <div>
+                                        <strong>${pred.field}</strong> - ${pred.crop}
+                                        <br><small class="text-muted">Stage: ${pred.growth_stage}</small>
+                                    </div>
+                                    <div class="text-end">
+                                        <span class="badge bg-success fs-6">${pred.days_to_harvest} days</span>
+                                        <br><small class="text-muted">${pred.expected_harvest}</small>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+                html += `</div>`;
+
+                // Weather Tab
+                html += `
+                    <div class="tab-pane fade" id="weatherTab">
+                        <h6 class="mb-3"><i class="bi bi-cloud-sun text-primary me-2"></i>7-Day Weather Forecast:</h6>
+                        <div class="row">
+                `;
+                
+                if (data.weather_forecast && data.weather_forecast.length > 0) {
+                    data.weather_forecast.forEach((day, idx) => {
+                        const weatherIcon = day.conditions.includes('Rain') ? 'cloud-rain' : 
+                                           day.conditions.includes('Cloud') ? 'clouds' : 'sun';
+                        html += `
+                            <div class="col-6 col-md-3 mb-2">
+                                <div class="bg-white rounded p-2 text-center border ${idx === 0 ? 'border-primary border-2' : ''}">
+                                    <small class="text-muted">${day.date}</small>
+                                    <div class="my-2"><i class="bi bi-${weatherIcon} fs-3 text-primary"></i></div>
+                                    <strong>${day.temperature}</strong>
+                                    <br><small>${day.conditions}</small>
+                                    <br><small class="text-primary">💧 ${day.precipitation}</small>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+                html += `</div></div>`;
+
+                // Carbon Footprint Tab
+                html += `
+                    <div class="tab-pane fade" id="carbonTab">
+                        <h6 class="mb-3"><i class="bi bi-leaf text-success me-2"></i>Carbon Footprint & Sustainability:</h6>
+                `;
+                
+                if (data.carbon_footprint) {
+                    const cf = data.carbon_footprint;
+                    const scoreColor = cf.sustainability_score >= 80 ? 'success' : cf.sustainability_score >= 60 ? 'warning' : 'danger';
+                    html += `
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <div class="bg-white rounded p-3 border">
+                                    <h5 class="text-center mb-3">Sustainability Score</h5>
+                                    <div class="text-center">
+                                        <div class="display-3 fw-bold text-${scoreColor}">${cf.sustainability_score}</div>
+                                        <span class="badge bg-${scoreColor} fs-6">${cf.rating}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <div class="bg-white rounded p-3 border">
+                                    <h6>Carbon Summary</h6>
+                                    <table class="table table-sm mb-0">
+                                        <tr><td>Total Emissions</td><td class="text-end text-danger">${cf.total_emissions}</td></tr>
+                                        <tr><td>Carbon Captured</td><td class="text-end text-success">${cf.carbon_sequestered}</td></tr>
+                                        <tr class="table-active"><td><strong>Net Carbon</strong></td><td class="text-end"><strong>${cf.net_carbon}</strong></td></tr>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                html += `</div>`;
+
+                // Irrigation Tab
+                html += `
+                    <div class="tab-pane fade" id="irrigationTab">
+                        <h6 class="mb-3"><i class="bi bi-droplet text-primary me-2"></i>Irrigation Recommendations:</h6>
+                `;
+                
+                if (data.irrigation) {
+                    const irr = data.irrigation;
+                    const statusIcon = irr.status.includes('No') ? 'check-circle text-success' : 'exclamation-circle text-warning';
+                    html += `
+                        <div class="bg-white rounded p-4 border">
+                            <div class="d-flex align-items-center mb-3">
+                                <i class="bi bi-${statusIcon} fs-2 me-3"></i>
+                                <div>
+                                    <h5 class="mb-0">${irr.status}</h5>
+                                    <p class="mb-0 text-muted">${irr.message}</p>
+                                </div>
+                            </div>
+                    `;
+                    
+                    if (irr.fields) {
+                        html += `<p><strong>Fields needing water:</strong> ${irr.fields.join(', ')}</p>`;
+                    }
+                    if (irr.recommended_amount) {
+                        html += `<p><strong>Recommended amount:</strong> ${irr.recommended_amount}</p>`;
+                    }
+                    if (irr.best_time) {
+                        html += `<p><strong>Best irrigation time:</strong> ${irr.best_time}</p>`;
+                    }
+                    if (irr.next_check) {
+                        html += `<p><strong>Next check:</strong> ${irr.next_check}</p>`;
+                    }
+                    if (irr.water_savings) {
+                        html += `<p class="text-success mb-0"><i class="bi bi-graph-down me-1"></i>${irr.water_savings}</p>`;
+                    }
+                    html += `</div>`;
+                }
+                html += `</div></div>`;
+
+                // Workflows executed
+                if (data.workflows_executed && data.workflows_executed.length > 0) {
+                    html += `
+                        <div class="mt-4 pt-3 border-top">
+                            <small class="text-muted"><i class="bi bi-gear me-1"></i>Analysis modules: ${data.workflows_executed.join(' • ')}</small>
+                        </div>
+                    `;
+                }
+
+                resultsArea.innerHTML = html;
+                
+                // Render time series chart after HTML is inserted
+                if (data.time_series && data.time_series.dates && data.time_series.dates.length > 0) {
+                    setTimeout(() => {
+                        renderTimeSeriesChart(data.time_series);
+                    }, 100);
+                }
+                
+                showToast('Analysis completed successfully!');
+            })
+            .catch(error => {
+                btn.disabled = false;
+                btnText.innerHTML = '<i class="bi bi-play-fill me-2"></i>Analyze My Farm';
+                resultsArea.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-wifi-off me-2"></i>
+                        Connection error. Please try again.
+                    </div>
+                `;
+                showToast('Connection error', 'error');
+            });
+        }
+
+        // Upload satellite image
+        function uploadSatellite() {
+            const fileInput = document.getElementById('satelliteFile');
+            if (!fileInput.files[0]) {
+                showToast('Please select an image first', 'warning');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('farm_id', document.getElementById('farmSelect').value || '1');
+
+            fetch('/api/sentinel-upload/', {
+                method: 'POST',
+                headers: { 'X-CSRFToken': getCsrfToken() },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    showToast('Satellite image uploaded successfully!');
+                    document.getElementById('satFileName').textContent = '';
+                    fileInput.value = '';
+                }
+            })
+            .catch(() => showToast('Upload failed', 'error'));
+        }
+
+        // Upload drone image
+        function uploadDrone() {
+            const fileInput = document.getElementById('droneFile');
+            if (!fileInput.files[0]) {
+                showToast('Please select an image first', 'warning');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            fetch('/api/drone-upload/', {
+                method: 'POST',
+                headers: { 'X-CSRFToken': getCsrfToken() },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    showToast('Drone image uploaded successfully!');
+                    document.getElementById('droneFileName').textContent = '';
+                    fileInput.value = '';
+                }
+            })
+            .catch(() => showToast('Upload failed', 'error'));
+        }
+
+        // Render Time Series Chart
+        let ndviChart = null;
+        function renderTimeSeriesChart(timeSeries) {
+            const canvas = document.getElementById('ndviChart');
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // Destroy previous chart if exists
+            if (ndviChart) {
+                ndviChart.destroy();
+            }
+            
+            ndviChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: timeSeries.dates.map(d => {
+                        const date = new Date(d);
+                        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    }),
+                    datasets: [
+                        {
+                            label: 'NDVI (Crop Health)',
+                            data: timeSeries.ndvi_values,
+                            borderColor: '#2e7d32',
+                            backgroundColor: 'rgba(46, 125, 50, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4,
+                            pointBackgroundColor: '#2e7d32'
+                        },
+                        {
+                            label: 'NDWI (Water Level)',
+                            data: timeSeries.ndwi_values,
+                            borderColor: '#1976d2',
+                            backgroundColor: 'rgba(25, 118, 210, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4,
+                            pointBackgroundColor: '#1976d2'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Crop Health & Water Level Over Time',
+                            font: { size: 14 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) label += ': ';
+                                    label += context.parsed.y.toFixed(3);
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            min: -0.5,
+                            max: 1,
+                            title: {
+                                display: true,
+                                text: 'Index Value'
+                            },
+                            grid: {
+                                color: function(context) {
+                                    if (context.tick.value === 0) return '#999';
+                                    if (context.tick.value === 0.4) return 'rgba(46, 125, 50, 0.3)';
+                                    return 'rgba(0,0,0,0.1)';
+                                }
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        }
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    }
+                }
+            });
+        }
+
+        // Load satellite images from API
+        function loadSatelliteImages() {
+            const gallery = document.getElementById('satelliteGallery');
+            const farmId = document.getElementById('farmSelect').value;
+            
+            gallery.innerHTML = `
+                <div class="col-12 text-center py-4">
+                    <div class="spinner-border text-success" role="status"></div>
+                    <p class="text-muted mt-2">Loading satellite images...</p>
+                </div>
+            `;
+            
+            let url = '/api/satellite-images/';
+            if (farmId) url += `?farm_id=${farmId}`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.total_images === 0) {
+                        gallery.innerHTML = `
+                            <div class="col-12 text-center py-4">
+                                <i class="bi bi-cloud-download text-muted" style="font-size: 3rem;"></i>
+                                <p class="text-muted mt-2">No satellite images found.</p>
+                                <small>Run analysis with "Auto-download" enabled to fetch satellite imagery from Planetary Computer.</small>
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    let html = `
+                        <div class="col-12 mb-2">
+                            <div class="alert alert-info py-2">
+                                <i class="bi bi-info-circle me-2"></i>
+                                <strong>${data.total_images}</strong> images found 
+                                (Local: ${data.local_count}, MinIO: ${data.minio_count})
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Display grouped by date
+                    for (const group of data.grouped_by_date.slice(0, 10)) {
+                        html += `
+                            <div class="col-md-6 col-lg-4">
+                                <div class="card h-100 border-0 shadow-sm">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="badge bg-success">${group.date}</span>
+                                            <span class="badge bg-${group.source === 'minio' ? 'primary' : 'secondary'}">${group.source}</span>
+                                        </div>
+                                        <h6 class="mb-2">Farm ${group.farm_id}</h6>
+                                        <div class="small text-muted">
+                                            <strong>${group.bands.length} bands:</strong>
+                                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                                ${group.bands.map(b => `
+                                                    <span class="badge bg-light text-dark" title="${b.filename}">
+                                                        ${b.type.toUpperCase()}
+                                                    </span>
+                                                `).join('')}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="card-footer bg-transparent border-0">
+                                        <button class="btn btn-sm btn-outline-success w-100" onclick="useImageForAnalysis('${group.farm_id}', '${group.date}')">
+                                            <i class="bi bi-graph-up me-1"></i>Analyze This Date
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    gallery.innerHTML = html;
+                })
+                .catch(err => {
+                    gallery.innerHTML = `
+                        <div class="col-12 text-center py-4">
+                            <i class="bi bi-exclamation-triangle text-warning" style="font-size: 3rem;"></i>
+                            <p class="text-muted mt-2">Could not load satellite images.</p>
+                            <small class="text-danger">${err.message || 'API error'}</small>
+                        </div>
+                    `;
+                });
+        }
+
+        // Use specific image date for analysis
+        function useImageForAnalysis(farmId, date) {
+            // Set the farm selector
+            const farmSelect = document.getElementById('farmSelect');
+            for (let option of farmSelect.options) {
+                if (option.value === farmId) {
+                    farmSelect.value = farmId;
+                    break;
+                }
+            }
+            
+            // Set the date fields
+            document.getElementById('startDate').value = date;
+            document.getElementById('endDate').value = date;
+            
+            // Uncheck auto-download (we already have the image)
+            document.getElementById('checkAutoDownload').checked = false;
+            
+            showToast(`Ready to analyze imagery from ${date}. Click "Analyze My Farm" to proceed.`, 'info');
+            
+            // Scroll to analysis section
+            document.getElementById('analyzeBtn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        // Initialize date inputs with default values
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date().toISOString().split('T')[0];
+            const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString().split('T')[0];
+            
+            // Set default date range (last 30 days)
+            document.getElementById('endDate').value = today;
+            // Leave startDate empty for "latest" behavior
+            
+            // Load IoT data on page load
+            loadIoTData();
+        });
+
+        // Load IoT sensor data
+        function loadIoTData() {
+            const farmId = document.getElementById('farmSelect').value;
+            const iotArea = document.getElementById('iotDataArea');
+            
+            iotArea.innerHTML = `
+                <div class="col-12 text-center py-3">
+                    <div class="spinner-border spinner-border-sm text-success" role="status"></div>
+                    <span class="text-muted ms-2">Loading...</span>
+                </div>
+            `;
+            
+            // Load time series chart first (primary focus)
+            loadSensorChart(farmId);
+            
+            // Fetch sensor summary for stats
+            let url = '/api/iot/summary/';
+            if (farmId) url = `/api/iot/summary/${farmId}/`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        iotArea.innerHTML = `
+                            <div class="col-12">
+                                <div class="alert alert-warning py-2 mb-0">
+                                    <i class="bi bi-exclamation-triangle me-2"></i>
+                                    ${data.error}
+                                </div>
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    // Build compact stats display
+                    let html = '';
+                    
+                    // Stats row
+                    html += `
+                        <div class="col-6 col-md-3 text-center">
+                            <div class="p-2">
+                                <i class="bi bi-cpu-fill text-primary fs-4"></i>
+                                <h4 class="mb-0">${data.devices_count || 0}</h4>
+                                <small class="text-muted">Devices</small>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3 text-center">
+                            <div class="p-2">
+                                <i class="bi bi-bar-chart-fill text-success fs-4"></i>
+                                <h4 class="mb-0">${data.readings_count || 0}</h4>
+                                <small class="text-muted">Readings</small>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Latest values from most recent reading
+                    if (data.latest_readings && data.latest_readings.length > 0) {
+                        const latest = data.latest_readings[0];
+                        const results = latest.results || {};
+                        const temp = results.temperature || latest.temperature;
+                        const moisture = results.moisture || results.soil_moisture || latest.moisture;
+                        
+                        if (temp !== null && temp !== undefined) {
+                            html += `
+                                <div class="col-6 col-md-3 text-center">
+                                    <div class="p-2">
+                                        <span style="font-size: 1.5rem;">🌡️</span>
+                                        <h4 class="mb-0">${typeof temp === 'number' ? temp.toFixed(1) : temp}°C</h4>
+                                        <small class="text-muted">Temperature</small>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                        
+                        if (moisture !== null && moisture !== undefined) {
+                            html += `
+                                <div class="col-6 col-md-3 text-center">
+                                    <div class="p-2">
+                                        <span style="font-size: 1.5rem;">💧</span>
+                                        <h4 class="mb-0">${typeof moisture === 'number' ? moisture.toFixed(1) : moisture}%</h4>
+                                        <small class="text-muted">Soil Moisture</small>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    // ThingsBoard connection status
+                    if (data.thingsboard) {
+                        html += `
+                            <div class="col-12 mt-2 text-center">
+                                <small class="text-muted">
+                                    <i class="bi bi-cloud-check text-success me-1"></i>
+                                    Connected to ${data.thingsboard.url || 'ThingsBoard'}
+                                    ${data.last_sync ? ' • Last sync: ' + new Date(data.last_sync).toLocaleString() : ''}
+                                </small>
+                            </div>
+                        `;
+                    }
+                    
+                    // If no readings yet
+                    if (!data.latest_readings || data.latest_readings.length === 0) {
+                        if (data.devices_count === 0) {
+                            html = `
+                                <div class="col-12 text-center py-2">
+                                    <i class="bi bi-info-circle text-info me-2"></i>
+                                    No devices configured. Add IoT devices in Settings.
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    iotArea.innerHTML = html || '<div class="col-12 text-center text-muted">No data available</div>';
+                })
+                .catch(err => {
+                    iotArea.innerHTML = `
+                        <div class="col-12">
+                            <div class="alert alert-danger py-2 mb-0">
+                                <i class="bi bi-x-circle me-2"></i>
+                                Failed to load: ${err.message}
+                            </div>
+                        </div>
+                    `;
+                });
+        }
+
+        // Load sensor time series chart
+        let sensorChart = null;
+        function loadSensorChart(farmId) {
+            const daysSelect = document.getElementById('chartDays');
+            const days = daysSelect ? daysSelect.value : 7;
+            const chartLoader = document.getElementById('chartLoader');
+            const chartNoData = document.getElementById('chartNoData');
+            const canvas = document.getElementById('sensorChart');
+            
+            // Show loader
+            chartLoader.style.display = 'block';
+            chartNoData.style.display = 'none';
+            canvas.style.display = 'none';
+            
+            // Get farm ID from selector if not passed
+            if (!farmId) {
+                farmId = document.getElementById('farmSelect').value;
+            }
+            
+            let url = `/api/iot/timeseries/?days=${days}`;
+            if (farmId) url = `/api/iot/timeseries/${farmId}/?days=${days}`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    chartLoader.style.display = 'none';
+                    
+                    if (data.error || !data.timestamps || data.timestamps.length === 0) {
+                        chartNoData.style.display = 'block';
+                        canvas.style.display = 'none';
+                        return;
+                    }
+                    
+                    chartNoData.style.display = 'none';
+                    canvas.style.display = 'block';
+                    const ctx = canvas.getContext('2d');
+                    
+                    if (sensorChart) {
+                        sensorChart.destroy();
+                    }
+                    
+                    sensorChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: data.timestamps.map(t => {
+                                const d = new Date(t);
+                                return days <= 1 ? d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : d.toLocaleDateString();
+                            }),
+                            datasets: [
+                                {
+                                    label: 'Temperature (°C)',
+                                    data: data.temperature || [],
+                                    borderColor: 'rgb(255, 99, 132)',
+                                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                                    tension: 0.3,
+                                    fill: true,
+                                    pointRadius: 2
+                                },
+                                {
+                                    label: 'Soil Moisture (%)',
+                                    data: data.moisture || [],
+                                    borderColor: 'rgb(54, 162, 235)',
+                                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                                    tension: 0.3,
+                                    fill: true,
+                                    pointRadius: 2
+                                },
+                                {
+                                    label: 'Humidity (%)',
+                                    data: data.humidity || [],
+                                    borderColor: 'rgb(75, 192, 192)',
+                                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                                    tension: 0.3,
+                                    fill: true,
+                                    pointRadius: 2
+                                }
+                            ].filter(ds => ds.data.length > 0)  // Only show datasets with data
+                        },
+                        options: {
+                            responsive: true,
+                            interaction: {
+                                mode: 'index',
+                                intersect: false
+                            },
+                            plugins: {
+                                legend: { position: 'bottom' },
+                                title: {
+                                    display: true,
+                                    text: `${data.farm_name || 'Farm'} - ${data.period || 'Time Series'}`
+                                }
+                            },
+                            scales: {
+                                y: { beginAtZero: false },
+                                x: {
+                                    ticks: {
+                                        maxTicksAuto: true,
+                                        maxRotation: 45
+                                    }
+                                }
+                            }
+                        }
+                    });
+                })
+                .catch(err => {
+                    document.getElementById('chartLoader').style.display = 'none';
+                    document.getElementById('chartNoData').style.display = 'block';
+                    document.getElementById('sensorChart').style.display = 'none';
+                });
+        }
+
+        // Sync data from ThingsBoard
+        function syncThingsBoard() {
+            const farmId = document.getElementById('farmSelect').value;
+            const iotArea = document.getElementById('iotDataArea');
+            
+            iotArea.innerHTML = `
+                <div class="col-12 text-center py-4">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <p class="text-muted mt-2">Syncing with ThingsBoard...</p>
+                </div>
+            `;
+            
+            const body = farmId ? { farm_id: farmId } : {};
+            
+            fetch('/api/iot/sync/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify(body)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    const synced = data.synced || data.successful || 0;
+                    const failed = data.failed || 0;
+                    showToast(`ThingsBoard sync complete! ${synced} device(s) synced, ${failed} failed.`, 
+                              failed > 0 ? 'warning' : 'success');
+                }
+                // Reload IoT data
+                loadIoTData();
+            })
+            .catch(err => {
+                showToast('Sync failed: ' + err.message, 'error');
+                loadIoTData();
+            });
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
