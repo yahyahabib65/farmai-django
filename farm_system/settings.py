@@ -153,3 +153,6 @@ MINIO_BUCKET_NAME = 'farm-data'
 # Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# CRUD import settings
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000  # Increase if you expect large imports

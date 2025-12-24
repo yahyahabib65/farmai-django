@@ -17,9 +17,9 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from imagery.views import DroneImageViewSet, DroneImageUploadView, AnalyticsView, SentinelImageUploadView, SatelliteImageListView
+from imagery.views import DroneImageViewSet, DroneImageUploadView, AnalyticsView, SentinelImageUploadView, SatelliteImageListView, ImagePreviewView
 from core.views import FarmViewSet, FieldBoundaryViewSet, DeviceViewSet, AssetViewSet, ManualImportView, farm_data_view, farm_filter_view
-from iot.views import SensorReadingViewSet, ThingsBoardSyncView, FarmSensorSummaryView, SensorTimeSeriesView, ThingsBoardTimeSeriesView, ThingsBoardKeysView
+from iot.views import SensorReadingViewSet, ThingsBoardSyncView, ThingsBoardHistoricalSyncView, FarmSensorSummaryView, SensorTimeSeriesView, ThingsBoardTimeSeriesView, ThingsBoardKeysView
 from django.shortcuts import redirect
 
 router = DefaultRouter()
@@ -41,10 +41,12 @@ urlpatterns = [
     path('api/analytics/run/', AnalyticsView.as_view(), name='analytics-run'),
     path('api/sentinel-upload/', SentinelImageUploadView.as_view(), name='sentinel-upload'),
     path('api/satellite-images/', SatelliteImageListView.as_view(), name='satellite-images'),
+    path('api/image-preview/', ImagePreviewView.as_view(), name='image-preview'),
     path('api/farms/<int:farm_id>/data/', farm_data_view, name='farm-data'),
     path('api/farms/filter/', farm_filter_view, name='farm-filter'),
     # ThingsBoard IoT sync endpoints
     path('api/iot/sync/', ThingsBoardSyncView.as_view(), name='thingsboard-sync'),
+    path('api/iot/sync-historical/', ThingsBoardHistoricalSyncView.as_view(), name='thingsboard-sync-historical'),
     path('api/iot/summary/', FarmSensorSummaryView.as_view(), name='sensor-summary'),
     path('api/iot/summary/<int:farm_id>/', FarmSensorSummaryView.as_view(), name='sensor-summary-farm'),
     path('api/iot/timeseries/', SensorTimeSeriesView.as_view(), name='sensor-timeseries'),
@@ -53,6 +55,8 @@ urlpatterns = [
     path('api/iot/thingsboard-timeseries/', ThingsBoardTimeSeriesView.as_view(), name='thingsboard-timeseries'),
     path('api/iot/thingsboard-timeseries/<int:device_id>/', ThingsBoardTimeSeriesView.as_view(), name='thingsboard-timeseries-device'),
     path('api/iot/thingsboard-keys/', ThingsBoardKeysView.as_view(), name='thingsboard-keys'),
+    # Imagery workflows
+    path('api/imagery/', include('imagery.urls')),
     path('api/', include(router.urls)),
     path('', home_view, name='home'),
 ]

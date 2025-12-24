@@ -16,18 +16,30 @@ class SensorReading(models.Model):
         # We can still access self.device.name normally here
         return f"{self.device.name} - {self.timestamp}"
     
-    # Helper properties to access common keys
+    # Helper properties to access common keys (supports various naming conventions)
     @property
     def temperature(self):
-        return self.results.get('temperature')
+        return self.results.get('temperature') or self.results.get('temp')
     
     @property
     def moisture(self):
-        return self.results.get('moisture') or self.results.get('soil_moisture')
+        """Get soil moisture - supports various key names from different sensors"""
+        return (
+            self.results.get('soilMoisture_%') or  # LUMS IoT format
+            self.results.get('soilMoisture_adc') or  # LUMS IoT ADC format
+            self.results.get('soilMoisture') or
+            self.results.get('soil_moisture') or
+            self.results.get('moisture')
+        )
     
     @property
     def humidity(self):
         return self.results.get('humidity')
+    
+    @property
+    def all_keys(self):
+        """Get all available keys in results"""
+        return list(self.results.keys()) if self.results else []
 
 
 class WeatherData(models.Model):

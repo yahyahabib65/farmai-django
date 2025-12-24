@@ -11,13 +11,14 @@ from .serializers import DroneImageSerializer
 from core.models import FieldBoundary, Farm
 from analytics.models import AnalyticsResult, HarvestPrediction, CarbonFootprint, CropClassification
 from iot.models import WeatherData
-from .ndvi_processor import process_uploaded_image, get_health_status
+from .ndvi_processor import process_uploaded_image, get_health_status, calculate_ndvi_from_separate_bands
 # Lazy imports to avoid heavy dependencies at module load
 # from .planetary_downloader import PlanetaryComputerDownloader, download_satellite_for_farm
 # from .geoai_processor import GeoAIProcessor
 import os
 import uuid
 import glob
+import tempfile
 from datetime import datetime, timedelta
 import random
 
@@ -252,6 +253,86 @@ class AnalyticsView(APIView):
         
         return None
     
+    def _build_download_status(self, result):
+        """Build a human-readable status message from download result"""
+        downloaded = result.get('images_downloaded', 0)
+        skipped = len(result.get('skipped_dates', []))
+        total = result.get('total_available', 0)
+        
+        parts = []
+        if downloaded > 0:
+            parts.append(f"Downloaded {downloaded} new image(s)")
+        if skipped > 0:
+            parts.append(f"Skipped {skipped} existing")
+        if total > 0:
+            parts.append(f"{total} available in range")
+        
+        if not parts:
+            return "No images found in date range"
+        
+        return " | ".join(parts)
+    
+    def _fetch_from_minio(self, farm_id, date):
+        """Fetch satellite imagery from MinIO for a specific date"""
+        try:
+            from minio import Minio
+            import tempfile
+            
+            minio_client = Minio(
+                os.environ.get('MINIO_ENDPOINT', 'localhost:9000'),
+                access_key=os.environ.get('MINIO_ACCESS_KEY', 'minioadmin'),
+                secret_key=os.environ.get('MINIO_SECRET_KEY', 'minioadmin'),
+                secure=False
+            )
+            
+            bucket_name = 'satellite-imagery'
+            prefix = f"farm_{farm_id}/{date}/"
+            
+            # List objects with the date prefix
+            objects = list(minio_client.list_objects(bucket_name, prefix=prefix))
+            
+            if not objects:
+                # Try alternative path format
+                prefix = f"{date}/"
+                objects = list(minio_client.list_objects(bucket_name, prefix=prefix))
+            
+            if not objects:
+                return None
+            
+            # Find a suitable image (prefer NIR band for NDVI)
+            target_obj = None
+            for obj in objects:
+                obj_name = obj.object_name.lower()
+                if 'nir' in obj_name or 'b08' in obj_name:
+                    target_obj = obj
+                    break
+            
+            # If no NIR found, use first TIFF
+            if not target_obj:
+                for obj in objects:
+                    if obj.object_name.lower().endswith(('.tif', '.tiff')):
+                        target_obj = obj
+                        break
+            
+            if not target_obj:
+                return None
+            
+            # Download to temp file
+            temp_dir = tempfile.mkdtemp()
+            local_path = os.path.join(temp_dir, os.path.basename(target_obj.object_name))
+            
+            minio_client.fget_object(bucket_name, target_obj.object_name, local_path)
+            
+            return {
+                'path': local_path,
+                'minio_path': f"{bucket_name}/{target_obj.object_name}",
+                'date': date,
+                'all_objects': [obj.object_name for obj in objects]
+            }
+        except Exception as e:
+            print(f"MinIO fetch error: {e}")
+            return None
+    
     def _download_from_planetary_computer(self, farm, start_date=None, end_date=None):
         """Download ALL satellite imagery from Planetary Computer within date range"""
         PlanetaryComputerDownloader = get_planetary_downloader()
@@ -323,6 +404,9 @@ class AnalyticsView(APIView):
         end_date = request.data.get('end_date')      # Format: YYYY-MM-DD
         auto_download = request.data.get('auto_download', True)  # Auto-download if not exists
         
+        # NEW: Image source parameter (local, minio)
+        requested_image_source = request.data.get('image_source')  # 'local' or 'minio'
+        
         # Get farm
         if farm_id:
             farm = get_object_or_404(Farm, id=farm_id)
@@ -340,7 +424,7 @@ class AnalyticsView(APIView):
         crop_classifications = []
         raw_calculations = []  # Store raw NDVI/NDWI calculation details
         
-        # SMART DOWNLOAD LOGIC: Check if imagery exists first
+        # SMART DOWNLOAD LOGIC: Always check Planetary Computer and download missing images
         latest_image = None
         image_processed = False
         image_results = None
@@ -349,79 +433,87 @@ class AnalyticsView(APIView):
         download_skipped = False
         date_filter_applied = bool(start_date or end_date)
         
-        # Step 1: Check for existing Sentinel imagery with date range filtering
-        existing_imagery = self._check_existing_imagery(
-            farm.id, 
-            start_date=start_date, 
-            end_date=end_date
-        )
+        # If image source is MinIO, fetch the image from MinIO first
+        if requested_image_source == 'minio' and start_date:
+            minio_image = self._fetch_from_minio(farm.id, start_date)
+            if minio_image:
+                latest_image = minio_image.get('path')
+                image_source = 'minio'
+                planetary_info = {
+                    'source': 'MinIO Object Storage',
+                    'image_date': start_date,
+                    'status': f'Using imagery from MinIO storage',
+                    'minio_path': minio_image.get('minio_path')
+                }
         
-        if existing_imagery:
-            # Use existing imagery within date range - don't download
-            latest_image = existing_imagery.get('path')
-            image_source = 'existing_sentinel'
-            download_skipped = True
+        # Step 1: If auto_download enabled AND we don't have a MinIO image, sync with Planetary Computer
+        # This downloads any missing images within the date range
+        if auto_download and not latest_image:
+            planetary_result = self._download_from_planetary_computer(
+                farm, start_date=start_date, end_date=end_date
+            )
+            if planetary_result:
+                planetary_info = {
+                    'source': 'Microsoft Planetary Computer (Sentinel-2)',
+                    'images_downloaded': planetary_result.get('images_downloaded', 0),
+                    'images_skipped': len(planetary_result.get('skipped_dates', [])),
+                    'total_bands_downloaded': planetary_result.get('total_bands_downloaded', 0),
+                    'downloaded_dates': planetary_result.get('downloaded_dates', []),
+                    'skipped_dates': planetary_result.get('skipped_dates', []),
+                    'existing_dates': planetary_result.get('existing_dates', []),
+                    'date_range': planetary_result.get('date_range', {}),
+                    'total_available': planetary_result.get('total_available', 0),
+                    'minio_storage': planetary_result.get('minio_paths', []),
+                    'status': self._build_download_status(planetary_result),
+                    'date_filter': {'start': start_date, 'end': end_date}
+                }
+        
+        # Step 2: Check for existing Sentinel imagery (including just-downloaded)
+        # Skip if we already have a MinIO image
+        if not latest_image:
+            existing_imagery = self._check_existing_imagery(
+                farm.id, 
+                start_date=start_date, 
+                end_date=end_date
+            )
             
-            # Build detailed status message
-            date_range_msg = ""
-            if start_date and end_date:
-                date_range_msg = f" (filtered: {start_date} to {end_date})"
-            elif end_date:
-                date_range_msg = f" (before {end_date})"
-            elif start_date:
-                date_range_msg = f" (after {start_date})"
-            
-            planetary_info = {
-                'source': 'Local Sentinel Storage',
-                'image_date': existing_imagery.get('date', 'Unknown'),
-                'status': f'Using existing Sentinel imagery{date_range_msg}',
-                'date_filter': {'start': start_date, 'end': end_date},
-                'available_dates': [d['date'] for d in existing_imagery.get('all_dates', [])],
-                'bands_available': len(existing_imagery.get('all_files', []))
-            }
-        else:
-            # Step 2: Try to find uploaded images with date range
+            if existing_imagery:
+                latest_image = existing_imagery.get('path')
+                image_source = 'sentinel'
+                
+                if not planetary_info:
+                    planetary_info = {
+                        'source': 'Local Sentinel Storage',
+                        'image_date': existing_imagery.get('date', 'Unknown'),
+                        'status': f'Using existing Sentinel imagery',
+                        'date_filter': {'start': start_date, 'end': end_date},
+                        'available_dates': [d['date'] for d in existing_imagery.get('all_dates', [])],
+                        'bands_available': len(existing_imagery.get('all_files', []))
+                    }
+                else:
+                    # Add info about which image we're using for analysis
+                    planetary_info['using_image_date'] = existing_imagery.get('date')
+                    planetary_info['available_dates'] = [d['date'] for d in existing_imagery.get('all_dates', [])]
+        
+        if not latest_image:
+            # Step 3: Try to find uploaded images with date range
             image_result = self._find_latest_image(farm.id, start_date=start_date, end_date=end_date)
             if image_result:
                 latest_image = image_result.get('path')
                 image_source = 'local_upload'
-                planetary_info = {
-                    'source': 'Local Upload',
-                    'image_date': image_result.get('date', 'Unknown'),
-                    'status': 'Using uploaded image'
-                }
-            
-            # Step 3: If no local images and auto_download is enabled, download from Planetary Computer
-            if not latest_image and auto_download:
-                planetary_result = self._download_from_planetary_computer(
-                    farm, start_date=start_date, end_date=end_date
-                )
-                if planetary_result and planetary_result.get('success'):
-                    latest_image = planetary_result.get('path')
-                    image_source = 'planetary_computer'
+                if not planetary_info:
                     planetary_info = {
-                        'source': 'Microsoft Planetary Computer (Sentinel-2)',
-                        'images_downloaded': planetary_result.get('images_downloaded', 0),
-                        'total_bands_downloaded': planetary_result.get('total_bands_downloaded', 0),
-                        'downloaded_dates': planetary_result.get('downloaded_dates', []),
-                        'date_range': planetary_result.get('date_range', {}),
-                        'total_available': planetary_result.get('total_available', 0),
-                        'minio_storage': planetary_result.get('minio_paths', []),
-                        'status': f"Downloaded {planetary_result.get('images_downloaded', 0)} images from Planetary Computer",
-                        'date_filter': {'start': start_date, 'end': end_date}
+                        'source': 'Local Upload',
+                        'image_date': image_result.get('date', 'Unknown'),
+                        'status': 'Using uploaded image'
                     }
-                else:
-                    planetary_info = {
-                        'status': f'No Sentinel images available for date range',
-                        'date_filter': {'start': start_date, 'end': end_date},
-                        'tip': 'Try a different date range or check farm location'
-                    }
-            elif not latest_image and not auto_download:
-                planetary_info = {
-                    'status': 'No imagery found for specified dates. Auto-download disabled.',
-                    'date_filter': {'start': start_date, 'end': end_date},
-                    'tip': 'Enable auto-download or upload images manually.'
-                }
+        
+        if not latest_image and not planetary_info:
+            planetary_info = {
+                'status': 'No imagery found for specified dates.',
+                'date_filter': {'start': start_date, 'end': end_date},
+                'tip': 'Check farm field boundaries or try a different date range.'
+            }
         
         if latest_image and run_ndvi:
             # Process actual image using GeoAI processor for advanced analysis
@@ -500,6 +592,43 @@ class AnalyticsView(APIView):
                         'planetary_computer': planetary_info,
                         'calculation_method': 'Real NDVI: (NIR - RED) / (NIR + RED)'
                     })
+            
+            # Try separate bands processor for satellite imagery folders
+            if not image_processed and latest_image:
+                folder_path = os.path.dirname(latest_image)
+                image_results = calculate_ndvi_from_separate_bands(folder_path)
+                if image_results.get('success'):
+                    image_processed = True
+                    raw_calculations.append({
+                        'image': os.path.basename(folder_path),
+                        'source': image_source,
+                        'processed_at': datetime.now().isoformat(),
+                        'processor': 'Sentinel-2 Separate Bands Processor',
+                        'pixel_count': image_results.get('pixel_count', 0),
+                        'ndvi_mean': image_results.get('ndvi_mean'),
+                        'ndvi_min': image_results.get('ndvi_min'),
+                        'ndvi_max': image_results.get('ndvi_max'),
+                        'ndvi_std': image_results.get('ndvi_std'),
+                        'ndwi_mean': image_results.get('ndwi_mean'),
+                        'ndwi_min': image_results.get('ndwi_min'),
+                        'ndwi_max': image_results.get('ndwi_max'),
+                        'ndwi_std': image_results.get('ndwi_std'),
+                        'healthy_pixels_pct': image_results.get('healthy_pixels_pct'),
+                        'stressed_pixels_pct': image_results.get('stressed_pixels_pct'),
+                        'bare_soil_pct': image_results.get('bare_soil_pct'),
+                        'planetary_computer': planetary_info,
+                        'calculation_method': 'Sentinel-2 Bands: NDVI=(NIR-RED)/(NIR+RED), NDWI=(GREEN-NIR)/(GREEN+NIR)'
+                    })
+        
+        # Determine the actual analysis date (use image date if available, otherwise today)
+        analysis_date = datetime.now().date()
+        if planetary_info:
+            image_date_str = planetary_info.get('using_image_date') or planetary_info.get('image_date')
+            if image_date_str and image_date_str != 'Unknown':
+                try:
+                    analysis_date = datetime.strptime(image_date_str, '%Y-%m-%d').date()
+                except:
+                    pass
         
         # === WORKFLOW 1: NDVI/NDWI Analysis (Vegetation & Water Indices) ===
         for field in fields:
@@ -522,10 +651,10 @@ class AnalyticsView(APIView):
             else:
                 water_status = 'Low water - irrigation recommended'
             
-            # Save NDVI/NDWI result to database
+            # Save NDVI/NDWI result to database using the actual image date
             analytics_result, _ = AnalyticsResult.objects.update_or_create(
                 field=field,
-                date=datetime.now().date(),
+                date=analysis_date,
                 defaults={
                     'avg_ndvi': ndvi_value,
                     'avg_ndwi': ndwi_value,
@@ -544,7 +673,7 @@ class AnalyticsView(APIView):
             
             crop_class, _ = CropClassification.objects.update_or_create(
                 field=field,
-                date=datetime.now().date(),
+                date=analysis_date,
                 defaults={
                     'detected_crop': detected_crop,
                     'confidence': crop_confidence,
@@ -761,7 +890,7 @@ class AnalyticsView(APIView):
         }, status=status.HTTP_200_OK)
 
     def _get_time_series_data(self, farm):
-        """Get historical NDVI/NDWI data for time series charts"""
+        """Get historical NDVI/NDWI data for time series charts - REAL DATA ONLY"""
         from analytics.models import AnalyticsResult
         
         # Get historical data from database
@@ -776,48 +905,63 @@ class AnalyticsView(APIView):
             'ndvi_values': [],
             'ndwi_values': [],
             'labels': [],
-            'data_source': 'database'
+            'data_source': 'database',
+            'record_count': 0
         }
         
         if historical_data.exists():
             for record in historical_data[:30]:  # Last 30 records
                 date_str = record['date'].strftime('%Y-%m-%d') if record['date'] else ''
-                if date_str not in time_series['dates']:
+                if date_str and date_str not in time_series['dates']:
                     time_series['dates'].append(date_str)
-                    time_series['ndvi_values'].append(record['avg_ndvi'])
-                    time_series['ndwi_values'].append(record['avg_ndwi'] or 0)
+                    time_series['ndvi_values'].append(round(record['avg_ndvi'], 4) if record['avg_ndvi'] else 0)
+                    time_series['ndwi_values'].append(round(record['avg_ndwi'], 4) if record['avg_ndwi'] else 0)
                     time_series['labels'].append(record['field__name'])
+            time_series['record_count'] = len(time_series['dates'])
         
-        # If we have fewer than 7 data points, add simulated historical data for demo
-        if len(time_series['dates']) < 7:
-            # Get the latest NDVI value to base simulation on
-            latest_ndvi = time_series['ndvi_values'][-1] if time_series['ndvi_values'] else 0.5
-            latest_ndwi = time_series['ndwi_values'][-1] if time_series['ndwi_values'] else 0.1
+        # If no database records, try to get historical data from stored imagery
+        if len(time_series['dates']) == 0:
+            # Check for historical satellite imagery that was processed
+            media_root = getattr(settings, 'MEDIA_ROOT', 'media')
+            satellite_path = os.path.join(media_root, 'uploads', 'satellite', str(farm.id))
             
-            # Generate simulated historical data going backwards
-            existing_dates = set(time_series['dates'])
-            simulated_dates = []
-            simulated_ndvi = []
-            simulated_ndwi = []
-            
-            for i in range(14, 0, -1):
-                past_date = datetime.now() - timedelta(days=i)
-                date_str = past_date.strftime('%Y-%m-%d')
+            if os.path.exists(satellite_path):
+                # Find all dated folders with results
+                dated_folders = []
+                for item in os.listdir(satellite_path):
+                    item_path = os.path.join(satellite_path, item)
+                    if os.path.isdir(item_path) and len(item) == 10 and '-' in item:
+                        # Check for NDVI results file
+                        results_file = os.path.join(item_path, 'analysis_results.json')
+                        if os.path.exists(results_file):
+                            try:
+                                with open(results_file, 'r') as f:
+                                    result_data = json.load(f)
+                                    dated_folders.append({
+                                        'date': item,
+                                        'ndvi': result_data.get('ndvi_mean', 0),
+                                        'ndwi': result_data.get('ndwi_mean', 0)
+                                    })
+                            except:
+                                pass
                 
-                if date_str not in existing_dates:
-                    simulated_dates.append(date_str)
-                    # Simulate improving trend towards current value
-                    progress = (14 - i) / 14
-                    sim_ndvi = round(0.25 + progress * (latest_ndvi - 0.25) + random.uniform(-0.05, 0.05), 3)
-                    sim_ndwi = round(-0.1 + progress * (latest_ndwi + 0.1) + random.uniform(-0.03, 0.03), 3)
-                    simulated_ndvi.append(min(0.9, max(0.1, sim_ndvi)))
-                    simulated_ndwi.append(min(0.5, max(-0.3, sim_ndwi)))
-            
-            # Prepend simulated data
-            time_series['dates'] = simulated_dates + time_series['dates']
-            time_series['ndvi_values'] = simulated_ndvi + time_series['ndvi_values']
-            time_series['ndwi_values'] = simulated_ndwi + time_series['ndwi_values']
-            time_series['data_source'] = 'mixed (database + simulated history)'
+                # Sort by date
+                dated_folders.sort(key=lambda x: x['date'])
+                
+                for record in dated_folders[-30:]:  # Last 30 records
+                    time_series['dates'].append(record['date'])
+                    time_series['ndvi_values'].append(round(record['ndvi'], 4))
+                    time_series['ndwi_values'].append(round(record['ndwi'], 4))
+                    time_series['labels'].append(farm.name)
+                
+                if dated_folders:
+                    time_series['data_source'] = 'stored_imagery_results'
+                    time_series['record_count'] = len(dated_folders)
+        
+        # Add message if no real data available
+        if len(time_series['dates']) == 0:
+            time_series['data_source'] = 'no_data'
+            time_series['message'] = 'No historical analysis data available. Run more analyses to build time series.'
         
         return time_series
 
@@ -895,12 +1039,14 @@ class SatelliteImageListView(APIView):
                         for f in os.listdir(item_path):
                             if f.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
                                 full_path = os.path.join(item_path, f)
+                                farm_id_val = farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']
                                 images.append({
-                                    'farm_id': farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id'],
-                                    'farm_name': farm_info.get('name', f"Farm {farm_info.get('id')}") if isinstance(farm_info, dict) else farm_info.get('name', ''),
+                                    'farm_id': farm_id_val,
+                                    'farm_name': farm_info.get('name', f"Farm {farm_id_val}") if isinstance(farm_info, dict) else farm_info.get('name', ''),
                                     'date': item,
                                     'filename': f,
-                                    'path': f"/media/uploads/satellite/{farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']}/{item}/{f}",
+                                    'path': f"/media/uploads/satellite/{farm_id_val}/{item}/{f}",
+                                    'preview_url': f"/api/image-preview/?path=uploads/satellite/{farm_id_val}/{item}/{f}",
                                     'file_size': os.path.getsize(full_path),
                                     'source': 'local',
                                     'type': self._get_band_type(f)
@@ -909,11 +1055,13 @@ class SatelliteImageListView(APIView):
                         # Direct file (legacy structure)
                         if item.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
                             full_path = os.path.join(farm_folder, item)
+                            farm_id_val = farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']
                             images.append({
-                                'farm_id': farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id'],
+                                'farm_id': farm_id_val,
                                 'date': datetime.fromtimestamp(os.path.getmtime(full_path)).strftime('%Y-%m-%d'),
                                 'filename': item,
-                                'path': f"/media/uploads/satellite/{farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']}/{item}",
+                                'path': f"/media/uploads/satellite/{farm_id_val}/{item}",
+                                'preview_url': f"/api/image-preview/?path=uploads/satellite/{farm_id_val}/{item}",
                                 'file_size': os.path.getsize(full_path),
                                 'source': 'local',
                                 'type': 'unknown'
@@ -945,6 +1093,7 @@ class SatelliteImageListView(APIView):
                             'date': date_str,
                             'filename': filename,
                             'path': obj.object_name,
+                            'preview_url': f"/api/image-preview/?source=minio&path={obj.object_name}",
                             'file_size': obj.size,
                             'source': 'minio',
                             'type': self._get_band_type(filename)
@@ -965,14 +1114,19 @@ class SatelliteImageListView(APIView):
                     'farm_id': img.get('farm_id'),
                     'date': img.get('date'),
                     'source': img.get('source'),
-                    'bands': []
+                    'bands': [],
+                    'preview_url': None  # Will be set to the first RGB-capable band
                 }
             grouped[key]['bands'].append({
                 'filename': img.get('filename'),
                 'type': img.get('type'),
                 'path': img.get('path'),
+                'preview_url': img.get('preview_url'),
                 'file_size': img.get('file_size')
             })
+            # Set preview URL to the first suitable band (prefer red, green, or blue)
+            if not grouped[key]['preview_url'] and img.get('type') in ['red', 'green', 'blue', 'nir']:
+                grouped[key]['preview_url'] = img.get('preview_url')
         
         return Response({
             'total_images': len(all_images),
@@ -1000,3 +1154,335 @@ class SatelliteImageListView(APIView):
         elif 'ndwi' in fn_lower:
             return 'ndwi'
         return 'unknown'
+
+
+class ImagePreviewView(APIView):
+    """Generate image previews/thumbnails for satellite imagery"""
+    permission_classes = (AllowAny,)
+    
+    def get(self, request):
+        from django.http import HttpResponse
+        import io
+        
+        path = request.query_params.get('path', '')
+        source = request.query_params.get('source', 'local')
+        width = int(request.query_params.get('width', 200))
+        height = int(request.query_params.get('height', 150))
+        
+        if not path:
+            return Response({'error': 'Path required'}, status=400)
+        
+        try:
+            image_data = None
+            
+            if source == 'minio':
+                # Fetch from MinIO
+                from minio import Minio
+                import tempfile
+                
+                minio_client = Minio(
+                    os.getenv('MINIO_ENDPOINT', 'localhost:9000'),
+                    access_key=os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
+                    secret_key=os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+                    secure=False
+                )
+                
+                bucket = 'satellite-imagery'
+                response = minio_client.get_object(bucket, path)
+                image_data = response.read()
+                response.close()
+                response.release_conn()
+            else:
+                # Fetch from local storage
+                media_root = getattr(settings, 'MEDIA_ROOT', 'media')
+                full_path = os.path.join(media_root, path)
+                
+                if not os.path.exists(full_path):
+                    return Response({'error': 'File not found'}, status=404)
+                
+                with open(full_path, 'rb') as f:
+                    image_data = f.read()
+            
+            # Process and create thumbnail
+            if path.lower().endswith(('.tif', '.tiff')):
+                # For GeoTIFF, use rasterio to read and convert
+                try:
+                    import rasterio
+                    from PIL import Image
+                    import numpy as np
+                    
+                    # Write to temp file for rasterio
+                    with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
+                        tmp.write(image_data)
+                        tmp_path = tmp.name
+                    
+                    with rasterio.open(tmp_path) as src:
+                        # Read the first band
+                        band = src.read(1)
+                        
+                        # Normalize to 0-255
+                        band = band.astype(float)
+                        min_val = np.percentile(band[band > 0], 2) if np.any(band > 0) else 0
+                        max_val = np.percentile(band[band > 0], 98) if np.any(band > 0) else 1
+                        
+                        if max_val > min_val:
+                            band = np.clip((band - min_val) / (max_val - min_val) * 255, 0, 255)
+                        else:
+                            band = np.zeros_like(band)
+                        
+                        band = band.astype(np.uint8)
+                        
+                        # Create PIL image and resize
+                        img = Image.fromarray(band, mode='L')
+                        img.thumbnail((width, height), Image.Resampling.LANCZOS)
+                        
+                        # Convert to RGB with a nice color map
+                        img_rgb = Image.new('RGB', img.size)
+                        for x in range(img.width):
+                            for y in range(img.height):
+                                v = img.getpixel((x, y))
+                                # Green tint for vegetation
+                                img_rgb.putpixel((x, y), (int(v * 0.3), v, int(v * 0.4)))
+                        
+                        # Save to bytes
+                        output = io.BytesIO()
+                        img_rgb.save(output, format='PNG')
+                        output.seek(0)
+                    
+                    # Cleanup temp file
+                    os.unlink(tmp_path)
+                    
+                    return HttpResponse(output.getvalue(), content_type='image/png')
+                    
+                except Exception as e:
+                    # Fallback: return a placeholder
+                    return self._placeholder_image(width, height, str(e)[:20])
+            else:
+                # For regular images (JPG, PNG)
+                from PIL import Image
+                
+                img = Image.open(io.BytesIO(image_data))
+                img.thumbnail((width, height), Image.Resampling.LANCZOS)
+                
+                output = io.BytesIO()
+                img.save(output, format='PNG')
+                output.seek(0)
+                
+                return HttpResponse(output.getvalue(), content_type='image/png')
+                
+        except Exception as e:
+            return self._placeholder_image(width, height, 'Error')
+    
+    def _placeholder_image(self, width, height, text='No Preview'):
+        """Generate a placeholder image"""
+        from django.http import HttpResponse
+        from PIL import Image, ImageDraw
+        import io
+        
+        img = Image.new('RGB', (width, height), color=(240, 240, 240))
+        draw = ImageDraw.Draw(img)
+        
+        # Draw border
+        draw.rectangle([(0, 0), (width-1, height-1)], outline=(200, 200, 200))
+        
+        # Draw text
+        text_bbox = draw.textbbox((0, 0), text)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        x = (width - text_width) // 2
+        y = (height - text_height) // 2
+        draw.text((x, y), text, fill=(150, 150, 150))
+        
+        output = io.BytesIO()
+        img.save(output, format='PNG')
+        output.seek(0)
+        
+        return HttpResponse(output.getvalue(), content_type='image/png')
+
+
+# ============== NEW IMAGERY WORKFLOW VIEWS ==============
+
+class SAMSegmentationView(APIView):
+    """
+    Segment imagery using Segment Anything Model.
+    
+    POST /api/imagery/sam/segment/
+    GET /api/imagery/sam/field/<field_id>/
+    """
+    parser_classes = [MultiPartParser]
+    
+    def post(self, request):
+        from .sam_processor import SAMProcessor
+        from PIL import Image
+        import numpy as np
+        
+        image_file = request.FILES.get('image')
+        if not image_file:
+            return Response({'error': 'No image provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Load image
+        img = Image.open(image_file)
+        img_array = np.array(img)
+        
+        # Initialize SAM
+        sam = SAMProcessor()
+        
+        # Try to load model
+        if not sam.load_model():
+            # Use fallback segmentation
+            result = sam._fallback_segmentation(img_array)
+        else:
+            result = sam.segment_automatic(img_array)
+        
+        # Remove masks from response (too large)
+        if 'masks' in result:
+            result['num_masks'] = len(result['masks'])
+            del result['masks']
+        
+        return Response(result)
+    
+    def get(self, request, field_id=None):
+        if not field_id:
+            return Response({'error': 'field_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from .sam_processor import segment_field_from_sentinel
+        result = segment_field_from_sentinel(field_id)
+        
+        return Response(result)
+
+
+class FieldBoundarySegmentationView(APIView):
+    """
+    Segment field boundaries from satellite imagery.
+    
+    POST /api/imagery/segment-fields/
+    """
+    parser_classes = [MultiPartParser]
+    
+    def post(self, request):
+        from .sam_processor import FieldBoundarySegmenter
+        from PIL import Image
+        import numpy as np
+        
+        image_file = request.FILES.get('image')
+        if not image_file:
+            return Response({'error': 'No image provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        min_area = int(request.data.get('min_area', 1000))
+        
+        img = Image.open(image_file)
+        img_array = np.array(img)
+        
+        segmenter = FieldBoundarySegmenter()
+        result = segmenter.segment_fields(img_array, min_field_area=min_area)
+        
+        # Remove masks from response
+        if 'masks' in result:
+            del result['masks']
+        
+        return Response(result)
+
+
+class ForestMapsView(APIView):
+    """
+    Download and analyze forest maps.
+    
+    GET /api/imagery/forest-maps/<farm_id>/
+    GET /api/imagery/forest-maps/?lat=30.5&lon=70.5
+    """
+    
+    def get(self, request, farm_id=None):
+        from .forest_maps import download_forest_maps_for_farm, ForestChangeDetector
+        
+        if farm_id:
+            result = download_forest_maps_for_farm(farm_id)
+        else:
+            lat = request.query_params.get('lat')
+            lon = request.query_params.get('lon')
+            
+            if not lat or not lon:
+                return Response(
+                    {'error': 'Provide farm_id or lat/lon coordinates'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            detector = ForestChangeDetector()
+            result = detector.analyze_location(float(lat), float(lon))
+        
+        return Response(result)
+
+
+class TimelapseView(APIView):
+    """
+    Generate timelapse visualizations.
+    
+    GET /api/imagery/timelapse/<field_id>/
+    GET /api/imagery/timelapse/<field_id>/?format=gif
+    """
+    
+    def get(self, request, field_id):
+        from .timelapse import create_field_timelapse
+        from datetime import datetime
+        
+        format_type = request.query_params.get('format', 'gif')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        
+        start = datetime.fromisoformat(start_date) if start_date else None
+        end = datetime.fromisoformat(end_date) if end_date else None
+        
+        result = create_field_timelapse(field_id, start, end, format_type)
+        
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Return file URL if successful
+        if 'output_path' in result:
+            result['url'] = f"/media/{result['output_path'].split('media/')[-1]}"
+        
+        return Response(result)
+
+
+class SpectralFusionView(APIView):
+    """
+    Fuse drone and satellite imagery.
+    
+    POST /api/imagery/spectral-fusion/
+    """
+    parser_classes = [MultiPartParser]
+    
+    def post(self, request):
+        from .spectral_fusion import SpectralFusion, SpectralExtension
+        from PIL import Image
+        import numpy as np
+        
+        drone_file = request.FILES.get('drone_image')
+        
+        if not drone_file:
+            return Response({'error': 'drone_image required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Load drone image
+        drone_img = np.array(Image.open(drone_file))
+        if drone_img.max() > 1:
+            drone_img = drone_img.astype(float) / 255
+        
+        # Extend spectral bands
+        extender = SpectralExtension()
+        extended = extender._empirical_extension(drone_img)
+        
+        # Calculate indices
+        indices = extender.calculate_indices(extended)
+        
+        return Response({
+            'status': 'success',
+            'original_shape': list(drone_img.shape),
+            'extended_shape': list(extended.shape),
+            'indices': {
+                'ndvi_mean': float(np.mean(indices['ndvi'])),
+                'ndvi_std': float(np.std(indices['ndvi'])),
+                'gndvi_mean': float(np.mean(indices['gndvi'])),
+                'savi_mean': float(np.mean(indices['savi'])),
+                'evi_mean': float(np.mean(indices['evi']))
+            },
+            'method': 'empirical_nir_estimation'
+        })

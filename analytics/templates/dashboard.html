@@ -445,9 +445,23 @@
                     <div>
                         <span class="text-muted">Images from Planetary Computer & MinIO</span>
                     </div>
-                    <button class="btn btn-sm btn-outline-success" onclick="loadSatelliteImages()">
-                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                    </button>
+                    <div>
+                        <button class="btn btn-sm btn-outline-primary me-2" onclick="batchAnalyzeAllDates()" id="batchAnalyzeBtn">
+                            <i class="bi bi-collection-play me-1"></i>Build Time Series
+                        </button>
+                        <button class="btn btn-sm btn-outline-success" onclick="loadSatelliteImages()">
+                            <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                        </button>
+                    </div>
+                </div>
+                <div id="batchProgress" class="alert alert-info d-none mb-3">
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        <span id="batchProgressText">Analyzing imagery...</span>
+                    </div>
+                    <div class="progress mt-2" style="height: 5px;">
+                        <div id="batchProgressBar" class="progress-bar bg-success" role="progressbar" style="width: 0%"></div>
+                    </div>
                 </div>
                 <div id="satelliteGallery" class="row g-3">
                     <div class="col-12 text-center py-4">
@@ -523,6 +537,7 @@
                         <option value="7" selected>Last 7 days</option>
                         <option value="14">Last 14 days</option>
                         <option value="30">Last 30 days</option>
+                        <option value="all">All Time</option>
                     </select>
                     <button class="btn btn-sm btn-outline-primary ms-2" onclick="syncThingsBoard()">
                         <i class="bi bi-cloud-arrow-down me-1"></i>Sync ThingsBoard
@@ -560,6 +575,199 @@
                         <i class="bi bi-cpu text-muted" style="font-size: 3rem; opacity: 0.3;"></i>
                         <p class="text-muted mt-2">Loading sensor stats...</p>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Farm/Field Management Modal -->
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="settingsModalLabel">
+                        <i class="bi bi-gear me-2"></i>Farm & Field Settings
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Tabs for Farm/Field -->
+                    <ul class="nav nav-tabs mb-3" id="settingsTabs" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active" id="farms-tab" data-bs-toggle="tab" data-bs-target="#farmsPane" type="button">
+                                <i class="bi bi-geo-alt me-1"></i>Farms
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" id="fields-tab" data-bs-toggle="tab" data-bs-target="#fieldsPane" type="button">
+                                <i class="bi bi-grid me-1"></i>Fields
+                            </button>
+                        </li>
+                    </ul>
+                    
+                    <div class="tab-content" id="settingsTabContent">
+                        <!-- Farms Tab -->
+                        <div class="tab-pane fade show active" id="farmsPane" role="tabpanel">
+                            <h6 class="mb-3"><i class="bi bi-plus-circle me-2"></i>Add New Farm</h6>
+                            <form id="addFarmForm">
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Farm Name <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="farmName" required minlength="2" placeholder="e.g., Green Valley Farm">
+                                        <div class="invalid-feedback" id="farmNameError"></div>
+                                    </div>
+                                    <div class="col-md-3 mb-3">
+                                        <label class="form-label">Latitude <span class="text-danger">*</span></label>
+                                        <input type="number" step="any" class="form-control" id="farmLat" required min="-90" max="90" placeholder="31.5204">
+                                        <div class="invalid-feedback" id="farmLatError"></div>
+                                    </div>
+                                    <div class="col-md-3 mb-3">
+                                        <label class="form-label">Longitude <span class="text-danger">*</span></label>
+                                        <input type="number" step="any" class="form-control" id="farmLon" required min="-180" max="180" placeholder="74.3587">
+                                        <div class="invalid-feedback" id="farmLonError"></div>
+                                    </div>
+                                </div>
+                                <div id="farmFormAlert" class="alert d-none mb-3"></div>
+                                <button type="submit" class="btn btn-success" id="addFarmBtn">
+                                    <i class="bi bi-plus-lg me-1"></i>Add Farm
+                                </button>
+                            </form>
+                            
+                            <hr class="my-4">
+                            
+                            <h6 class="mb-3"><i class="bi bi-list me-2"></i>Existing Farms</h6>
+                            <div id="farmsList" class="list-group">
+                                <div class="text-center py-3">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    <span class="ms-2">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Fields Tab -->
+                        <div class="tab-pane fade" id="fieldsPane" role="tabpanel">
+                            <h6 class="mb-3"><i class="bi bi-plus-circle me-2"></i>Add New Field</h6>
+                            <form id="addFieldForm">
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Select Farm <span class="text-danger">*</span></label>
+                                        <select class="form-select" id="fieldFarm" required>
+                                            <option value="">Choose a farm...</option>
+                                            {% for farm in farms %}
+                                            <option value="{{ farm.id }}">{{ farm.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <div class="invalid-feedback" id="fieldFarmError"></div>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Field Name <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="fieldName" required minlength="2" placeholder="e.g., North Wheat Field">
+                                        <div class="invalid-feedback" id="fieldNameError"></div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Crop Type <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="fieldCrop" required minlength="2" placeholder="e.g., Wheat, Rice, Cotton">
+                                        <div class="invalid-feedback" id="fieldCropError"></div>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Boundary (WKT) <span class="text-danger">*</span></label>
+                                        <textarea class="form-control" id="fieldBoundary" rows="3" required 
+                                                  placeholder="POLYGON((lon lat, lon lat, lon lat, lon lat))"></textarea>
+                                        <small class="text-muted">Enter polygon in WKT format. Use <a href="https://geojson.io" target="_blank">geojson.io</a> to draw and convert.</small>
+                                        <div class="invalid-feedback" id="fieldBoundaryError"></div>
+                                    </div>
+                                </div>
+                                <div id="fieldFormAlert" class="alert d-none mb-3"></div>
+                                <button type="submit" class="btn btn-success" id="addFieldBtn">
+                                    <i class="bi bi-plus-lg me-1"></i>Add Field
+                                </button>
+                            </form>
+                            
+                            <hr class="my-4">
+                            
+                            <h6 class="mb-3"><i class="bi bi-list me-2"></i>Existing Fields</h6>
+                            <div id="fieldsList" class="list-group">
+                                <div class="text-center py-3">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    <span class="ms-2">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ThingsBoard Login Modal -->
+    <div class="modal fade" id="thingsboardModal" tabindex="-1" aria-labelledby="thingsboardModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="thingsboardModalLabel">
+                        <i class="bi bi-cloud-arrow-down me-2"></i>ThingsBoard Sync
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted mb-3">Enter your ThingsBoard credentials to sync IoT sensor data.</p>
+                    <div class="mb-3">
+                        <label for="tbUsername" class="form-label">Username</label>
+                        <input type="text" class="form-control" id="tbUsername" placeholder="tenant@thingsboard.org">
+                    </div>
+                    <div class="mb-3">
+                        <label for="tbPassword" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="tbPassword" placeholder="Enter password">
+                    </div>
+                    
+                    <!-- Sync Type Selection -->
+                    <div class="mb-3">
+                        <label class="form-label">Sync Type</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="syncType" id="syncLatest" value="latest" checked>
+                            <label class="btn btn-outline-success" for="syncLatest">
+                                <i class="bi bi-clock me-1"></i>Latest Only
+                            </label>
+                            <input type="radio" class="btn-check" name="syncType" id="syncHistorical" value="historical">
+                            <label class="btn btn-outline-success" for="syncHistorical">
+                                <i class="bi bi-calendar-range me-1"></i>Historical
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Historical Date Range (hidden by default) -->
+                    <div id="historicalOptions" style="display: none;">
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label for="tbStartDate" class="form-label">Start Date</label>
+                                <input type="date" class="form-control" id="tbStartDate" value="2024-08-01">
+                            </div>
+                            <div class="col-6">
+                                <label for="tbEndDate" class="form-label">End Date</label>
+                                <input type="date" class="form-control" id="tbEndDate">
+                            </div>
+                        </div>
+                        <div class="alert alert-info py-2">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <small>Historical sync may take longer depending on the date range.</small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="tbRemember">
+                        <label class="form-check-label text-muted" for="tbRemember">
+                            Remember credentials (stored in browser)
+                        </label>
+                    </div>
+                    <div id="tbSyncStatus" class="alert alert-info" style="display: none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success" id="tbSyncBtn" onclick="doThingsboardSync()">
+                        <i class="bi bi-cloud-arrow-down me-1"></i>Sync Now
+                    </button>
                 </div>
             </div>
         </div>
@@ -638,6 +846,12 @@
             
             if (startDate) requestBody.start_date = startDate;
             if (endDate) requestBody.end_date = endDate;
+            
+            // Include image source if set (from clicking "Analyze This Date")
+            if (window.imageSource) {
+                requestBody.image_source = window.imageSource;
+                window.imageSource = null; // Clear after use
+            }
 
             // Make API call
             fetch('/api/analytics/run/', {
@@ -820,9 +1034,16 @@
                 html += `</div>`;
 
                 // Charts/Graphs Tab - Time Series
+                const timeSeriesSource = data.time_series ? data.time_series.data_source : 'unknown';
+                const recordCount = data.time_series ? (data.time_series.record_count || data.time_series.dates?.length || 0) : 0;
                 html += `
                     <div class="tab-pane fade" id="chartsTab">
-                        <h6 class="mb-3"><i class="bi bi-graph-up text-success me-2"></i>NDVI/NDWI Time Series:</h6>
+                        <h6 class="mb-3">
+                            <i class="bi bi-graph-up text-success me-2"></i>NDVI/NDWI Time Series:
+                            <span class="badge bg-${timeSeriesSource === 'database' ? 'success' : timeSeriesSource === 'no_data' ? 'warning' : 'info'} ms-2" style="font-size: 0.7rem;">
+                                ${recordCount} records from ${timeSeriesSource === 'database' ? 'Database' : timeSeriesSource === 'stored_imagery_results' ? 'Stored Results' : 'No Data'}
+                            </span>
+                        </h6>
                         <div class="bg-white rounded p-3 border mb-3">
                             <canvas id="ndviChart" height="200"></canvas>
                         </div>
@@ -1076,6 +1297,21 @@
                     setTimeout(() => {
                         renderTimeSeriesChart(data.time_series);
                     }, 100);
+                } else if (data.time_series && data.time_series.data_source === 'no_data') {
+                    // Show message when no historical data
+                    setTimeout(() => {
+                        const canvas = document.getElementById('ndviChart');
+                        if (canvas) {
+                            const parent = canvas.parentElement;
+                            parent.innerHTML = `
+                                <div class="text-center py-4">
+                                    <i class="bi bi-bar-chart-line text-muted" style="font-size: 3rem;"></i>
+                                    <p class="text-muted mt-2">No historical data available yet.</p>
+                                    <small class="text-muted">Run more analyses over time to build your time series chart.</small>
+                                </div>
+                            `;
+                        }
+                    }, 100);
                 }
                 
                 showToast('Analysis completed successfully!');
@@ -1290,28 +1526,42 @@
                     
                     // Display grouped by date
                     for (const group of data.grouped_by_date.slice(0, 10)) {
+                        const previewUrl = group.preview_url || '/static/placeholder-satellite.png';
                         html += `
                             <div class="col-md-6 col-lg-4">
                                 <div class="card h-100 border-0 shadow-sm">
-                                    <div class="card-body">
-                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div class="card-img-top position-relative" style="height: 120px; overflow: hidden; background: #f0f0f0;">
+                                        <img src="${previewUrl}" 
+                                             alt="Satellite imagery ${group.date}" 
+                                             style="width: 100%; height: 100%; object-fit: cover;"
+                                             onerror="this.src='/static/placeholder-satellite.png'; this.style.objectFit='contain'; this.style.padding='20px';">
+                                        <div class="position-absolute top-0 start-0 m-2">
                                             <span class="badge bg-success">${group.date}</span>
+                                        </div>
+                                        <div class="position-absolute top-0 end-0 m-2">
                                             <span class="badge bg-${group.source === 'minio' ? 'primary' : 'secondary'}">${group.source}</span>
                                         </div>
-                                        <h6 class="mb-2">Farm ${group.farm_id}</h6>
+                                        <button class="btn btn-sm btn-light position-absolute bottom-0 end-0 m-2" 
+                                                onclick="showImageModal('${group.date}', '${previewUrl}', ${JSON.stringify(group.bands).replace(/"/g, '&quot;')})">
+                                            <i class="bi bi-arrows-fullscreen"></i>
+                                        </button>
+                                    </div>
+                                    <div class="card-body py-2">
+                                        <h6 class="mb-1">Farm ${group.farm_id}</h6>
                                         <div class="small text-muted">
                                             <strong>${group.bands.length} bands:</strong>
                                             <div class="d-flex flex-wrap gap-1 mt-1">
-                                                ${group.bands.map(b => `
+                                                ${group.bands.slice(0, 6).map(b => `
                                                     <span class="badge bg-light text-dark" title="${b.filename}">
                                                         ${b.type.toUpperCase()}
                                                     </span>
                                                 `).join('')}
+                                                ${group.bands.length > 6 ? `<span class="badge bg-secondary">+${group.bands.length - 6}</span>` : ''}
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="card-footer bg-transparent border-0">
-                                        <button class="btn btn-sm btn-outline-success w-100" onclick="useImageForAnalysis('${group.farm_id}', '${group.date}')">
+                                    <div class="card-footer bg-transparent border-0 pt-0">
+                                        <button class="btn btn-sm btn-outline-success w-100" onclick="useImageForAnalysis('${group.farm_id}', '${group.date}', '${group.source}')">
                                             <i class="bi bi-graph-up me-1"></i>Analyze This Date
                                         </button>
                                     </div>
@@ -1334,7 +1584,7 @@
         }
 
         // Use specific image date for analysis
-        function useImageForAnalysis(farmId, date) {
+        function useImageForAnalysis(farmId, date, source) {
             // Set the farm selector
             const farmSelect = document.getElementById('farmSelect');
             for (let option of farmSelect.options) {
@@ -1351,10 +1601,100 @@
             // Uncheck auto-download (we already have the image)
             document.getElementById('checkAutoDownload').checked = false;
             
-            showToast(`Ready to analyze imagery from ${date}. Click "Analyze My Farm" to proceed.`, 'info');
+            // Store the source for the analysis API
+            window.imageSource = source || 'local';
             
-            // Scroll to analysis section
+            // Show loading message
+            showToast(`Starting analysis for ${date} from ${source}...`, 'info');
+            
+            // Scroll to analysis section and automatically trigger analysis
             document.getElementById('analyzeBtn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // Trigger analysis after a short delay to allow scroll to complete
+            setTimeout(() => {
+                runAnalysis();
+            }, 300);
+        }
+
+        // Batch analyze all stored imagery dates to build time series
+        async function batchAnalyzeAllDates() {
+            const farmId = document.getElementById('farmSelect').value;
+            if (!farmId) {
+                showToast('Please select a farm first', 'warning');
+                return;
+            }
+            
+            const btn = document.getElementById('batchAnalyzeBtn');
+            const progress = document.getElementById('batchProgress');
+            const progressText = document.getElementById('batchProgressText');
+            const progressBar = document.getElementById('batchProgressBar');
+            
+            btn.disabled = true;
+            progress.classList.remove('d-none');
+            progressText.textContent = 'Fetching available dates...';
+            progressBar.style.width = '0%';
+            
+            try {
+                // First, get the list of available dates
+                const response = await fetch(`/api/satellite-images/?farm_id=${farmId}`);
+                const data = await response.json();
+                
+                if (!data.grouped_by_date || data.grouped_by_date.length === 0) {
+                    showToast('No stored imagery found', 'warning');
+                    btn.disabled = false;
+                    progress.classList.add('d-none');
+                    return;
+                }
+                
+                // Analyze each date sequentially
+                const dates = data.grouped_by_date;
+                let completed = 0;
+                let errors = 0;
+                
+                for (const group of dates) {
+                    progressText.textContent = `Analyzing ${group.date} (${completed + 1}/${dates.length})...`;
+                    progressBar.style.width = `${(completed / dates.length) * 100}%`;
+                    
+                    try {
+                        await fetch('/api/analytics/run/', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': getCsrfToken()
+                            },
+                            body: JSON.stringify({
+                                farm_id: farmId,
+                                start_date: group.date,
+                                end_date: group.date,
+                                run_ndvi: true,
+                                run_ndwi: true,
+                                auto_download: false,
+                                image_source: group.source
+                            })
+                        });
+                        completed++;
+                    } catch (e) {
+                        errors++;
+                        console.error(`Error analyzing ${group.date}:`, e);
+                    }
+                }
+                
+                progressBar.style.width = '100%';
+                progressText.textContent = `Complete! Analyzed ${completed} dates${errors > 0 ? ` (${errors} errors)` : ''}`;
+                
+                showToast(`Time series built! ${completed} dates analyzed.`, 'success');
+                
+                // Hide progress after a delay
+                setTimeout(() => {
+                    progress.classList.add('d-none');
+                    btn.disabled = false;
+                }, 3000);
+                
+            } catch (error) {
+                showToast('Failed to build time series: ' + error.message, 'error');
+                btn.disabled = false;
+                progress.classList.add('d-none');
+            }
         }
 
         // Initialize date inputs with default values
@@ -1498,9 +1838,18 @@
 
         // Load sensor time series chart
         let sensorChart = null;
+        const sensorColors = [
+            { border: 'rgb(54, 162, 235)', bg: 'rgba(54, 162, 235, 0.1)' },   // Blue
+            { border: 'rgb(255, 99, 132)', bg: 'rgba(255, 99, 132, 0.1)' },   // Red
+            { border: 'rgb(75, 192, 192)', bg: 'rgba(75, 192, 192, 0.1)' },   // Teal
+            { border: 'rgb(255, 159, 64)', bg: 'rgba(255, 159, 64, 0.1)' },   // Orange
+            { border: 'rgb(153, 102, 255)', bg: 'rgba(153, 102, 255, 0.1)' }, // Purple
+            { border: 'rgb(255, 205, 86)', bg: 'rgba(255, 205, 86, 0.1)' },   // Yellow
+        ];
+        
         function loadSensorChart(farmId) {
             const daysSelect = document.getElementById('chartDays');
-            const days = daysSelect ? daysSelect.value : 7;
+            const days = daysSelect ? daysSelect.value : '7';
             const chartLoader = document.getElementById('chartLoader');
             const chartNoData = document.getElementById('chartNoData');
             const canvas = document.getElementById('sensorChart');
@@ -1523,7 +1872,11 @@
                 .then(data => {
                     chartLoader.style.display = 'none';
                     
-                    if (data.error || !data.timestamps || data.timestamps.length === 0) {
+                    // Check if we have sensor data
+                    const hasSensorData = data.sensors && data.sensors.length > 0 && 
+                                          data.sensors.some(s => s.data && s.data.length > 0);
+                    
+                    if (data.error || (!hasSensorData && (!data.timestamps || data.timestamps.length === 0))) {
                         chartNoData.style.display = 'block';
                         canvas.style.display = 'none';
                         return;
@@ -1537,42 +1890,105 @@
                         sensorChart.destroy();
                     }
                     
+                    // Determine label format based on time range
+                    const isShortRange = days === '1';
+                    const isAllTime = days === 'all';
+                    
+                    // Build datasets for each sensor
+                    const datasets = [];
+                    
+                    if (data.sensors && data.sensors.length > 0) {
+                        // Multi-sensor mode: create separate lines for each sensor
+                        data.sensors.forEach((sensor, idx) => {
+                            const colorIdx = idx % sensorColors.length;
+                            const sensorName = sensor.device_name || `Sensor ${sensor.device_id}`;
+                            
+                            // Moisture dataset for this sensor
+                            const moistureData = sensor.data.map(d => d.moisture);
+                            if (moistureData.some(v => v !== null)) {
+                                datasets.push({
+                                    label: `${sensorName} - Moisture (%)`,
+                                    data: moistureData,
+                                    borderColor: sensorColors[colorIdx].border,
+                                    backgroundColor: sensorColors[colorIdx].bg,
+                                    tension: 0.3,
+                                    fill: false,
+                                    pointRadius: isAllTime ? 1 : 2
+                                });
+                            }
+                            
+                            // Temperature dataset for this sensor (use different shade)
+                            const tempData = sensor.data.map(d => d.temperature);
+                            if (tempData.some(v => v !== null)) {
+                                datasets.push({
+                                    label: `${sensorName} - Temp (°C)`,
+                                    data: tempData,
+                                    borderColor: sensorColors[(colorIdx + 1) % sensorColors.length].border,
+                                    backgroundColor: sensorColors[(colorIdx + 1) % sensorColors.length].bg,
+                                    tension: 0.3,
+                                    fill: false,
+                                    borderDash: [5, 5],  // Dashed line for temperature
+                                    pointRadius: isAllTime ? 1 : 2
+                                });
+                            }
+                        });
+                        
+                        // Use timestamps from first sensor with data
+                        var chartLabels = data.sensors[0].data.map(d => {
+                            const date = new Date(d.timestamp);
+                            if (isShortRange) {
+                                return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                            } else if (isAllTime) {
+                                return date.toLocaleDateString([], {month: 'short', day: 'numeric'});
+                            } else {
+                                return date.toLocaleDateString();
+                            }
+                        });
+                    } else {
+                        // Fallback: Legacy single-sensor mode
+                        var chartLabels = data.timestamps.map(t => {
+                            const d = new Date(t);
+                            if (isShortRange) {
+                                return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                            } else if (isAllTime) {
+                                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+                            } else {
+                                return d.toLocaleDateString();
+                            }
+                        });
+                        
+                        if (data.moisture && data.moisture.length > 0) {
+                            datasets.push({
+                                label: 'Soil Moisture (%)',
+                                data: data.moisture,
+                                borderColor: sensorColors[0].border,
+                                backgroundColor: sensorColors[0].bg,
+                                tension: 0.3,
+                                fill: true,
+                                pointRadius: isAllTime ? 1 : 2
+                            });
+                        }
+                        if (data.temperature && data.temperature.length > 0) {
+                            datasets.push({
+                                label: 'Temperature (°C)',
+                                data: data.temperature,
+                                borderColor: sensorColors[1].border,
+                                backgroundColor: sensorColors[1].bg,
+                                tension: 0.3,
+                                fill: true,
+                                pointRadius: isAllTime ? 1 : 2
+                            });
+                        }
+                    }
+                    
+                    // Show sensor count info
+                    const sensorCountInfo = data.sensor_count ? ` (${data.sensor_count} sensor${data.sensor_count > 1 ? 's' : ''})` : '';
+                    
                     sensorChart = new Chart(ctx, {
                         type: 'line',
                         data: {
-                            labels: data.timestamps.map(t => {
-                                const d = new Date(t);
-                                return days <= 1 ? d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : d.toLocaleDateString();
-                            }),
-                            datasets: [
-                                {
-                                    label: 'Temperature (°C)',
-                                    data: data.temperature || [],
-                                    borderColor: 'rgb(255, 99, 132)',
-                                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                                    tension: 0.3,
-                                    fill: true,
-                                    pointRadius: 2
-                                },
-                                {
-                                    label: 'Soil Moisture (%)',
-                                    data: data.moisture || [],
-                                    borderColor: 'rgb(54, 162, 235)',
-                                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
-                                    tension: 0.3,
-                                    fill: true,
-                                    pointRadius: 2
-                                },
-                                {
-                                    label: 'Humidity (%)',
-                                    data: data.humidity || [],
-                                    borderColor: 'rgb(75, 192, 192)',
-                                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
-                                    tension: 0.3,
-                                    fill: true,
-                                    pointRadius: 2
-                                }
-                            ].filter(ds => ds.data.length > 0)  // Only show datasets with data
+                            labels: chartLabels,
+                            datasets: datasets.filter(ds => ds.data.length > 0)
                         },
                         options: {
                             responsive: true,
@@ -1584,7 +2000,7 @@
                                 legend: { position: 'bottom' },
                                 title: {
                                     display: true,
-                                    text: `${data.farm_name || 'Farm'} - ${data.period || 'Time Series'}`
+                                    text: `${data.farm_name || 'Farm'} - ${data.period || 'Time Series'}${sensorCountInfo}`
                                 }
                             },
                             scales: {
@@ -1608,19 +2024,109 @@
 
         // Sync data from ThingsBoard
         function syncThingsBoard() {
+            // Check for stored credentials
+            const storedUsername = localStorage.getItem('tb_username');
+            const storedPassword = localStorage.getItem('tb_password');
+            
+            if (storedUsername && storedPassword) {
+                document.getElementById('tbUsername').value = storedUsername;
+                document.getElementById('tbPassword').value = storedPassword;
+                document.getElementById('tbRemember').checked = true;
+            }
+            
+            // Set default end date to today
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('tbEndDate').value = today;
+            
+            // Add sync type toggle handler
+            document.querySelectorAll('input[name="syncType"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    const historicalOpts = document.getElementById('historicalOptions');
+                    historicalOpts.style.display = this.value === 'historical' ? 'block' : 'none';
+                });
+            });
+            
+            // Show the modal
+            const modal = new bootstrap.Modal(document.getElementById('thingsboardModal'));
+            modal.show();
+        }
+        
+        function doThingsboardSync() {
             const farmId = document.getElementById('farmSelect').value;
-            const iotArea = document.getElementById('iotDataArea');
+            const username = document.getElementById('tbUsername').value;
+            const password = document.getElementById('tbPassword').value;
+            const remember = document.getElementById('tbRemember').checked;
+            const syncType = document.querySelector('input[name="syncType"]:checked').value;
+            const statusDiv = document.getElementById('tbSyncStatus');
+            const syncBtn = document.getElementById('tbSyncBtn');
             
-            iotArea.innerHTML = `
-                <div class="col-12 text-center py-4">
-                    <div class="spinner-border text-primary" role="status"></div>
-                    <p class="text-muted mt-2">Syncing with ThingsBoard...</p>
-                </div>
-            `;
+            if (!username || !password) {
+                statusDiv.className = 'alert alert-warning';
+                statusDiv.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>Please enter username and password';
+                statusDiv.style.display = 'block';
+                return;
+            }
             
-            const body = farmId ? { farm_id: farmId } : {};
+            // Save credentials if requested
+            if (remember) {
+                localStorage.setItem('tb_username', username);
+                localStorage.setItem('tb_password', password);
+            } else {
+                localStorage.removeItem('tb_username');
+                localStorage.removeItem('tb_password');
+            }
             
-            fetch('/api/iot/sync/', {
+            // Show loading
+            syncBtn.disabled = true;
+            syncBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Syncing...';
+            statusDiv.className = 'alert alert-info';
+            statusDiv.innerHTML = '<i class="bi bi-cloud-arrow-down me-2"></i>Connecting to ThingsBoard...';
+            statusDiv.style.display = 'block';
+            
+            // Determine endpoint and body based on sync type
+            let endpoint = '/api/iot/sync/';
+            let body = {
+                username: username,
+                password: password
+            };
+            
+            if (syncType === 'historical') {
+                endpoint = '/api/iot/sync-historical/';
+                body.start_date = document.getElementById('tbStartDate').value;
+                body.end_date = document.getElementById('tbEndDate').value;
+                // For historical sync, we need to get device_id
+                // First, we'll get devices from the farm
+                statusDiv.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Pulling historical data (this may take a while)...';
+            }
+            
+            if (farmId) body.farm_id = farmId;
+            
+            // For historical sync, we need to first get device ID
+            if (syncType === 'historical') {
+                // Get the first device with thingsboard_id from this farm
+                fetch(`/api/devices/?farm=${farmId || ''}`)
+                    .then(r => r.json())
+                    .then(devices => {
+                        const device = devices.find(d => d.thingsboard_id);
+                        if (!device) {
+                            throw new Error('No device with ThingsBoard ID found');
+                        }
+                        body.device_id = device.id;
+                        return doSyncRequest(endpoint, body, statusDiv, syncBtn, syncType);
+                    })
+                    .catch(err => {
+                        syncBtn.disabled = false;
+                        syncBtn.innerHTML = '<i class="bi bi-cloud-arrow-down me-1"></i>Sync Now';
+                        statusDiv.className = 'alert alert-danger';
+                        statusDiv.innerHTML = `<i class="bi bi-x-circle me-2"></i>${err.message}`;
+                    });
+            } else {
+                doSyncRequest(endpoint, body, statusDiv, syncBtn, syncType);
+            }
+        }
+        
+        function doSyncRequest(endpoint, body, statusDiv, syncBtn, syncType) {
+            fetch(endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1630,20 +2136,434 @@
             })
             .then(response => response.json())
             .then(data => {
+                syncBtn.disabled = false;
+                syncBtn.innerHTML = '<i class="bi bi-cloud-arrow-down me-1"></i>Sync Now';
+                
                 if (data.error) {
-                    showToast(data.error, 'error');
+                    statusDiv.className = 'alert alert-danger';
+                    statusDiv.innerHTML = `<i class="bi bi-x-circle me-2"></i>${data.error}`;
+                    if (data.details) {
+                        statusDiv.innerHTML += `<br><small class="text-muted">${data.details}</small>`;
+                    }
                 } else {
-                    const synced = data.synced || data.successful || 0;
+                    const created = data.readings_created || data.synced || 0;
+                    const skipped = data.readings_skipped || 0;
                     const failed = data.failed || 0;
-                    showToast(`ThingsBoard sync complete! ${synced} device(s) synced, ${failed} failed.`, 
-                              failed > 0 ? 'warning' : 'success');
+                    
+                    statusDiv.className = failed > 0 ? 'alert alert-warning' : 'alert alert-success';
+                    
+                    if (syncType === 'historical') {
+                        statusDiv.innerHTML = `
+                            <i class="bi bi-check-circle me-2"></i>
+                            <strong>Historical Sync Complete!</strong><br>
+                            <small>${created} readings created, ${skipped} duplicates skipped</small>
+                            ${data.keys ? `<br><small class="text-muted">Keys: ${data.keys.join(', ')}</small>` : ''}
+                        `;
+                    } else {
+                        statusDiv.innerHTML = `
+                            <i class="bi bi-check-circle me-2"></i>
+                            <strong>Sync Complete!</strong><br>
+                            <small>${created} device(s) synced, ${data.readings_created || 0} reading(s) created</small>
+                            ${failed > 0 ? `<br><small class="text-warning">${failed} failed</small>` : ''}
+                        `;
+                    }
+                    
+                    // Close modal and reload data after success
+                    setTimeout(() => {
+                        bootstrap.Modal.getInstance(document.getElementById('thingsboardModal')).hide();
+                        loadIoTData();
+                        loadSensorChart();
+                        showToast(`Synced ${created} readings`, 'success');
+                    }, 1500);
                 }
-                // Reload IoT data
-                loadIoTData();
             })
             .catch(err => {
-                showToast('Sync failed: ' + err.message, 'error');
-                loadIoTData();
+                syncBtn.disabled = false;
+                syncBtn.innerHTML = '<i class="bi bi-cloud-arrow-down me-1"></i>Sync Now';
+                statusDiv.className = 'alert alert-danger';
+                statusDiv.innerHTML = `<i class="bi bi-x-circle me-2"></i>Sync failed: ${err.message}`;
+            });
+        }
+        
+        // Show image modal with full preview
+        function showImageModal(date, previewUrl, bands) {
+            // Create or get modal
+            let modal = document.getElementById('imagePreviewModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'imagePreviewModal';
+                modal.className = 'modal fade';
+                modal.innerHTML = `
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">
+                                    <i class="bi bi-satellite me-2"></i>Satellite Imagery - <span id="modalDate"></span>
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="text-center mb-3">
+                                    <img id="modalImage" src="" alt="Satellite Preview" 
+                                         style="max-width: 100%; max-height: 400px; border-radius: 8px;">
+                                </div>
+                                <h6><i class="bi bi-layers me-2"></i>Available Bands:</h6>
+                                <div id="modalBands" class="d-flex flex-wrap gap-2"></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                <button type="button" class="btn btn-success" id="modalAnalyzeBtn">
+                                    <i class="bi bi-graph-up me-1"></i>Analyze This Image
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+            
+            // Update modal content
+            document.getElementById('modalDate').textContent = date;
+            document.getElementById('modalImage').src = previewUrl.replace('width=200', 'width=600').replace('height=150', 'height=400');
+            
+            // Show bands
+            const bandsContainer = document.getElementById('modalBands');
+            bandsContainer.innerHTML = bands.map(b => `
+                <div class="card border-0 shadow-sm" style="min-width: 100px;">
+                    <div class="card-body p-2 text-center">
+                        <img src="${b.preview_url || previewUrl}" alt="${b.type}" 
+                             style="width: 60px; height: 45px; object-fit: cover; border-radius: 4px;">
+                        <div class="small mt-1">
+                            <span class="badge bg-${getBandColor(b.type)}">${b.type.toUpperCase()}</span>
+                        </div>
+                        <div class="text-muted" style="font-size: 0.7rem;">${formatFileSize(b.file_size)}</div>
+                    </div>
+                </div>
+            `).join('');
+            
+            // Show modal
+            const bsModal = new bootstrap.Modal(modal);
+            bsModal.show();
+        }
+        
+        function getBandColor(type) {
+            const colors = {
+                'red': 'danger',
+                'green': 'success',
+                'blue': 'primary',
+                'nir': 'warning',
+                'swir': 'info',
+                'ndvi': 'success',
+                'ndwi': 'primary'
+            };
+            return colors[type] || 'secondary';
+        }
+        
+        function formatFileSize(bytes) {
+            if (!bytes) return 'N/A';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+        
+        // ========== Settings Modal Functions ==========
+        
+        function openSettingsModal() {
+            const modal = new bootstrap.Modal(document.getElementById('settingsModal'));
+            modal.show();
+            loadFarmsList();
+            loadFieldsList();
+        }
+        
+        function loadFarmsList() {
+            const list = document.getElementById('farmsList');
+            fetch('/api/farms/')
+                .then(response => response.json())
+                .then(farms => {
+                    if (farms.length === 0) {
+                        list.innerHTML = '<div class="list-group-item text-muted">No farms yet. Add one above!</div>';
+                        return;
+                    }
+                    list.innerHTML = farms.map(farm => `
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${farm.name}</strong>
+                                <br><small class="text-muted">
+                                    <i class="bi bi-geo-alt me-1"></i>
+                                    ${farm.location ? `${farm.location.coordinates[1].toFixed(4)}, ${farm.location.coordinates[0].toFixed(4)}` : 'No location'}
+                                </small>
+                            </div>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteFarm(${farm.id})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                })
+                .catch(() => {
+                    list.innerHTML = '<div class="list-group-item text-danger">Failed to load farms</div>';
+                });
+        }
+        
+        function loadFieldsList() {
+            const list = document.getElementById('fieldsList');
+            fetch('/api/fields/')
+                .then(response => response.json())
+                .then(fields => {
+                    if (fields.length === 0) {
+                        list.innerHTML = '<div class="list-group-item text-muted">No fields yet. Add one above!</div>';
+                        return;
+                    }
+                    list.innerHTML = fields.map(field => `
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${field.name}</strong>
+                                <span class="badge bg-success ms-2">${field.crop_type || 'Unknown crop'}</span>
+                                <br><small class="text-muted">
+                                    <i class="bi bi-rulers me-1"></i>
+                                    ${field.area_hectares ? field.area_hectares.toFixed(2) + ' ha' : 'Area unknown'}
+                                    ${field.distance_from_farm ? ` • ${(field.distance_from_farm/1000).toFixed(1)} km from farm` : ''}
+                                </small>
+                            </div>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteField(${field.id})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                })
+                .catch(() => {
+                    list.innerHTML = '<div class="list-group-item text-danger">Failed to load fields</div>';
+                });
+        }
+        
+        // Add Farm Form Handler
+        document.getElementById('addFarmForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const alertDiv = document.getElementById('farmFormAlert');
+            const btn = document.getElementById('addFarmBtn');
+            
+            // Clear previous errors
+            document.querySelectorAll('#addFarmForm .is-invalid').forEach(el => el.classList.remove('is-invalid'));
+            alertDiv.classList.add('d-none');
+            
+            const name = document.getElementById('farmName').value.trim();
+            const lat = parseFloat(document.getElementById('farmLat').value);
+            const lon = parseFloat(document.getElementById('farmLon').value);
+            
+            // Client-side validation
+            let hasError = false;
+            
+            if (name.length < 2) {
+                document.getElementById('farmName').classList.add('is-invalid');
+                document.getElementById('farmNameError').textContent = 'Farm name must be at least 2 characters';
+                hasError = true;
+            }
+            
+            if (isNaN(lat) || lat < -90 || lat > 90) {
+                document.getElementById('farmLat').classList.add('is-invalid');
+                document.getElementById('farmLatError').textContent = 'Latitude must be between -90 and 90';
+                hasError = true;
+            }
+            
+            if (isNaN(lon) || lon < -180 || lon > 180) {
+                document.getElementById('farmLon').classList.add('is-invalid');
+                document.getElementById('farmLonError').textContent = 'Longitude must be between -180 and 180';
+                hasError = true;
+            }
+            
+            if (lat === 0 && lon === 0) {
+                alertDiv.className = 'alert alert-warning';
+                alertDiv.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>Location (0, 0) is in the ocean. Please enter valid coordinates.';
+                alertDiv.classList.remove('d-none');
+                hasError = true;
+            }
+            
+            if (hasError) return;
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding...';
+            
+            fetch('/api/farms/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({
+                    name: name,
+                    location: {
+                        type: 'Point',
+                        coordinates: [lon, lat]
+                    },
+                    owner: 1  // Default owner
+                })
+            })
+            .then(response => {
+                if (!response.ok) return response.json().then(err => Promise.reject(err));
+                return response.json();
+            })
+            .then(data => {
+                alertDiv.className = 'alert alert-success';
+                alertDiv.innerHTML = `<i class="bi bi-check-circle me-2"></i>Farm "${data.name}" created successfully!`;
+                alertDiv.classList.remove('d-none');
+                
+                // Reset form
+                document.getElementById('addFarmForm').reset();
+                
+                // Reload farms list
+                loadFarmsList();
+                
+                // Update farm selector in main form
+                const farmSelect = document.getElementById('farmSelect');
+                const option = document.createElement('option');
+                option.value = data.id;
+                option.textContent = data.name;
+                farmSelect.appendChild(option);
+                
+                showToast(`Farm "${data.name}" created!`, 'success');
+            })
+            .catch(err => {
+                alertDiv.className = 'alert alert-danger';
+                let errorMsg = 'Failed to create farm';
+                if (err.name) errorMsg = err.name.join(', ');
+                else if (err.location) errorMsg = err.location.join(', ');
+                else if (err.detail) errorMsg = err.detail;
+                alertDiv.innerHTML = `<i class="bi bi-x-circle me-2"></i>${errorMsg}`;
+                alertDiv.classList.remove('d-none');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-plus-lg me-1"></i>Add Farm';
+            });
+        });
+        
+        // Add Field Form Handler
+        document.getElementById('addFieldForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const alertDiv = document.getElementById('fieldFormAlert');
+            const btn = document.getElementById('addFieldBtn');
+            
+            // Clear previous errors
+            document.querySelectorAll('#addFieldForm .is-invalid').forEach(el => el.classList.remove('is-invalid'));
+            alertDiv.classList.add('d-none');
+            
+            const farmId = document.getElementById('fieldFarm').value;
+            const name = document.getElementById('fieldName').value.trim();
+            const cropType = document.getElementById('fieldCrop').value.trim();
+            const boundaryWkt = document.getElementById('fieldBoundary').value.trim();
+            
+            // Client-side validation
+            let hasError = false;
+            
+            if (!farmId) {
+                document.getElementById('fieldFarm').classList.add('is-invalid');
+                document.getElementById('fieldFarmError').textContent = 'Please select a farm';
+                hasError = true;
+            }
+            
+            if (name.length < 2) {
+                document.getElementById('fieldName').classList.add('is-invalid');
+                document.getElementById('fieldNameError').textContent = 'Field name must be at least 2 characters';
+                hasError = true;
+            }
+            
+            if (cropType.length < 2) {
+                document.getElementById('fieldCrop').classList.add('is-invalid');
+                document.getElementById('fieldCropError').textContent = 'Crop type must be at least 2 characters';
+                hasError = true;
+            }
+            
+            if (!boundaryWkt.toLowerCase().startsWith('polygon')) {
+                document.getElementById('fieldBoundary').classList.add('is-invalid');
+                document.getElementById('fieldBoundaryError').textContent = 'Boundary must be a valid POLYGON WKT';
+                hasError = true;
+            }
+            
+            if (hasError) return;
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding...';
+            
+            fetch('/api/fields/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({
+                    farm: farmId,
+                    name: name,
+                    crop_type: cropType,
+                    boundary: boundaryWkt
+                })
+            })
+            .then(response => {
+                if (!response.ok) return response.json().then(err => Promise.reject(err));
+                return response.json();
+            })
+            .then(data => {
+                alertDiv.className = 'alert alert-success';
+                alertDiv.innerHTML = `<i class="bi bi-check-circle me-2"></i>Field "${data.name}" created successfully!`;
+                alertDiv.classList.remove('d-none');
+                
+                // Reset form
+                document.getElementById('addFieldForm').reset();
+                
+                // Reload fields list
+                loadFieldsList();
+                
+                showToast(`Field "${data.name}" created!`, 'success');
+            })
+            .catch(err => {
+                alertDiv.className = 'alert alert-danger';
+                let errorMsg = 'Failed to create field';
+                if (err.boundary) errorMsg = Array.isArray(err.boundary) ? err.boundary.join(', ') : err.boundary;
+                else if (err.name) errorMsg = err.name.join(', ');
+                else if (err.crop_type) errorMsg = err.crop_type.join(', ');
+                else if (err.detail) errorMsg = err.detail;
+                else if (err.non_field_errors) errorMsg = err.non_field_errors.join(', ');
+                alertDiv.innerHTML = `<i class="bi bi-x-circle me-2"></i>${errorMsg}`;
+                alertDiv.classList.remove('d-none');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-plus-lg me-1"></i>Add Field';
+            });
+        });
+        
+        function deleteFarm(farmId) {
+            if (!confirm('Are you sure you want to delete this farm? All associated fields will also be deleted.')) return;
+            
+            fetch(`/api/farms/${farmId}/`, {
+                method: 'DELETE',
+                headers: { 'X-CSRFToken': getCsrfToken() }
+            })
+            .then(response => {
+                if (response.ok) {
+                    showToast('Farm deleted', 'success');
+                    loadFarmsList();
+                    loadFieldsList();
+                } else {
+                    showToast('Failed to delete farm', 'error');
+                }
+            });
+        }
+        
+        function deleteField(fieldId) {
+            if (!confirm('Are you sure you want to delete this field?')) return;
+            
+            fetch(`/api/fields/${fieldId}/`, {
+                method: 'DELETE',
+                headers: { 'X-CSRFToken': getCsrfToken() }
+            })
+            .then(response => {
+                if (response.ok) {
+                    showToast('Field deleted', 'success');
+                    loadFieldsList();
+                } else {
+                    showToast('Failed to delete field', 'error');
+                }
             });
         }
     </script>

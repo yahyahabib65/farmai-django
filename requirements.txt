@@ -275,3 +275,5 @@ xarray==2025.12.0
 xxhash==3.6.0
 xyzservices==2025.11.0
 yarl==1.22.0
+PyWavelets==1.8.0
+segment-anything @ git+https://github.com/facebookresearch/segment-anything.git

@@ -184,6 +184,117 @@ def process_uploaded_image(file_path, save_results=True):
     return process_tiff_image(file_path)
 
 
+def calculate_ndvi_from_separate_bands(folder_path: str) -> dict:
+    """
+    Calculate NDVI/NDWI from separate band files in a folder.
+    
+    Expected files in folder:
+    - nir_B08.tif (NIR band)
+    - red_B04.tif (RED band)
+    - green_B03.tif (GREEN band)
+    
+    Args:
+        folder_path: Path to folder containing band files
+    
+    Returns:
+        Dict with NDVI/NDWI results
+    """
+    results = {
+        'success': False,
+        'ndvi_mean': None,
+        'ndwi_mean': None,
+        'ndvi_min': None,
+        'ndvi_max': None,
+        'ndvi_std': None,
+        'ndwi_min': None,
+        'ndwi_max': None,
+        'ndwi_std': None,
+        'pixel_count': 0,
+        'healthy_pixels_pct': 0,
+        'stressed_pixels_pct': 0,
+        'bare_soil_pct': 0,
+        'error': None
+    }
+    
+    if not os.path.exists(folder_path):
+        results['error'] = f'Folder not found: {folder_path}'
+        return results
+    
+    # Find band files
+    nir_file = None
+    red_file = None
+    green_file = None
+    
+    for f in os.listdir(folder_path):
+        f_lower = f.lower()
+        if 'nir' in f_lower or 'b08' in f_lower or 'b8' in f_lower:
+            nir_file = os.path.join(folder_path, f)
+        elif 'red' in f_lower or 'b04' in f_lower or 'b4' in f_lower:
+            red_file = os.path.join(folder_path, f)
+        elif 'green' in f_lower or 'b03' in f_lower or 'b3' in f_lower:
+            green_file = os.path.join(folder_path, f)
+    
+    if not nir_file or not red_file:
+        results['error'] = f'Required bands not found. Need NIR and RED. Found: nir={nir_file}, red={red_file}'
+        return results
+    
+    try:
+        if HAS_RASTERIO:
+            import rasterio
+            
+            # Read NIR and RED bands
+            with rasterio.open(nir_file) as nir_src:
+                nir_band = nir_src.read(1).astype(float)
+            
+            with rasterio.open(red_file) as red_src:
+                red_band = red_src.read(1).astype(float)
+            
+            # Calculate NDVI
+            ndvi = calculate_ndvi_from_bands(nir_band, red_band)
+            
+            # Calculate NDWI if green band exists
+            ndwi = None
+            if green_file:
+                with rasterio.open(green_file) as green_src:
+                    green_band = green_src.read(1).astype(float)
+                ndwi = calculate_ndwi_from_bands(green_band, nir_band)
+            
+            # Calculate statistics
+            valid_ndvi = ndvi[~np.isnan(ndvi)]
+            
+            if len(valid_ndvi) > 0:
+                results['success'] = True
+                results['ndvi_mean'] = round(float(np.mean(valid_ndvi)), 4)
+                results['ndvi_min'] = round(float(np.min(valid_ndvi)), 4)
+                results['ndvi_max'] = round(float(np.max(valid_ndvi)), 4)
+                results['ndvi_std'] = round(float(np.std(valid_ndvi)), 4)
+                results['pixel_count'] = len(valid_ndvi)
+                
+                # Calculate health percentages
+                healthy = np.sum(valid_ndvi >= 0.4) / len(valid_ndvi) * 100
+                stressed = np.sum((valid_ndvi >= 0.1) & (valid_ndvi < 0.4)) / len(valid_ndvi) * 100
+                bare_soil = np.sum(valid_ndvi < 0.1) / len(valid_ndvi) * 100
+                
+                results['healthy_pixels_pct'] = round(healthy, 2)
+                results['stressed_pixels_pct'] = round(stressed, 2)
+                results['bare_soil_pct'] = round(bare_soil, 2)
+            
+            if ndwi is not None:
+                valid_ndwi = ndwi[~np.isnan(ndwi)]
+                if len(valid_ndwi) > 0:
+                    results['ndwi_mean'] = round(float(np.mean(valid_ndwi)), 4)
+                    results['ndwi_min'] = round(float(np.min(valid_ndwi)), 4)
+                    results['ndwi_max'] = round(float(np.max(valid_ndwi)), 4)
+                    results['ndwi_std'] = round(float(np.std(valid_ndwi)), 4)
+        else:
+            results['error'] = 'rasterio not available'
+            
+    except Exception as e:
+        results['error'] = str(e)
+    
+    return results
+
+
 def get_ndvi_color(ndvi_value):
     """
     Return a color code based on NDVI value

@@ -16,7 +16,7 @@ class FarmResource(resources.ModelResource):
 class FieldBoundaryResource(resources.ModelResource):
     class Meta:
         model = FieldBoundary
-        fields = ('id', 'name', 'farm__name', 'crop_type', 'area_hectares', 'created_at')
+        fields = ('id', 'name', 'farm__name', 'crop_type', 'area_hectares','boundary', 'created_at')
 
 
 class DeviceResource(resources.ModelResource):

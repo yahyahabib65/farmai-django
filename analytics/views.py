@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from core.models import FieldBoundary, Device
+from rest_framework import status
+from core.models import FieldBoundary, Device, Farm
 from iot.models import SensorReading
 from analytics.models import AnalyticsResult
 from rest_framework.parsers import MultiPartParser
@@ -9,7 +10,7 @@ from imagery.models import SentinelImage, DroneImage
 # from geoai import semantic_segmentation
 import json
 from django.shortcuts import render
-from core.models import Farm
+from datetime import datetime, timedelta
 
 class DashboardView(APIView):
     def get(self, request, farm_id):
@@ -119,3 +120,202 @@ def dashboard_view(request):
         'images_count': images_count,
     }
     return render(request, 'dashboard.html', context)
+
+
+# ============== NEW WORKFLOW VIEWS ==============
+
+class NDVITimeSeriesView(APIView):
+    """
+    Analyze NDVI time-series for a field.
+    
+    Endpoints:
+    - GET /api/analytics/timeseries/<field_id>/
+    - GET /api/analytics/timeseries/<field_id>/?analysis=crop_cycles
+    - GET /api/analytics/timeseries/<field_id>/?analysis=harvest
+    - GET /api/analytics/timeseries/<field_id>/?analysis=degradation
+    """
+    
+    def get(self, request, field_id):
+        from analytics.time_series import analyze_field_ndvi_timeseries, NDVITimeSeries
+        
+        analysis_type = request.query_params.get('analysis', 'all')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        
+        # Parse dates
+        start = datetime.fromisoformat(start_date) if start_date else None
+        end = datetime.fromisoformat(end_date) if end_date else None
+        
+        result = analyze_field_ndvi_timeseries(field_id, start, end)
+        
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Filter by analysis type if specified
+        if analysis_type == 'crop_cycles':
+            return Response({
+                'field_id': result['field_id'],
+                'field_name': result['field_name'],
+                'crop_cycles': result['crop_cycles']
+            })
+        elif analysis_type == 'harvest':
+            return Response({
+                'field_id': result['field_id'],
+                'field_name': result['field_name'],
+                'harvest_germination': result['harvest_germination']
+            })
+        elif analysis_type == 'degradation':
+            return Response({
+                'field_id': result['field_id'],
+                'field_name': result['field_name'],
+                'land_degradation': result['land_degradation']
+            })
+        
+        return Response(result)
+
+
+class IrrigationClassificationView(APIView):
+    """
+    Classify irrigation status using ML.
+    
+    GET /api/analytics/irrigation/<field_id>/
+    """
+    
+    def get(self, request, field_id):
+        from analytics.ml_models import classify_field_irrigation
+        
+        result = classify_field_irrigation(field_id)
+        
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(result)
+
+
+class WeedDetectionView(APIView):
+    """
+    Detect weeds in field imagery using GMM.
+    
+    POST /api/analytics/weed-detection/
+    """
+    parser_classes = [MultiPartParser]
+    
+    def post(self, request):
+        from analytics.ml_models import WeedDetector
+        from PIL import Image
+        import numpy as np
+        
+        image_file = request.FILES.get('image')
+        if not image_file:
+            return Response({'error': 'No image provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Load image
+        img = Image.open(image_file)
+        img_array = np.array(img)
+        
+        if len(img_array.shape) != 3 or img_array.shape[2] < 3:
+            return Response({'error': 'Image must be RGB'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Detect weeds
+        detector = WeedDetector(n_components=3)
+        result = detector.detect_from_image(
+            img_array[:, :, 0],
+            img_array[:, :, 1],
+            img_array[:, :, 2]
+        )
+        
+        # Remove large arrays from response
+        if 'cluster_labels' in result:
+            del result['cluster_labels']
+        if 'semantic_labels' in result:
+            del result['semantic_labels']
+        
+        return Response(result)
+
+
+class SensorPlacementView(APIView):
+    """
+    Find optimal sensor placement locations.
+    
+    GET /api/analytics/sensor-placement/<field_id>/
+    GET /api/analytics/sensor-placement/<field_id>/?n_sensors=5&method=auto
+    """
+    
+    def get(self, request, field_id):
+        from analytics.sensor_placement import find_sensor_locations_for_field
+        
+        n_sensors = int(request.query_params.get('n_sensors', 5))
+        method = request.query_params.get('method', 'auto')
+        
+        result = find_sensor_locations_for_field(field_id, n_sensors, method)
+        
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(result)
+
+
+class GHGCalculatorView(APIView):
+    """
+    Calculate greenhouse gas balance for a field.
+    
+    GET /api/analytics/ghg/<field_id>/
+    POST /api/analytics/ghg/<field_id>/ (with custom inputs)
+    """
+    
+    def get(self, request, field_id):
+        from analytics.ghg_calculator import calculate_field_ghg
+        
+        result = calculate_field_ghg(field_id)
+        
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(result)
+    
+    def post(self, request, field_id):
+        from analytics.ghg_calculator import calculate_field_ghg
+        
+        synthetic_n = request.data.get('synthetic_n_kg')
+        diesel = request.data.get('diesel_liters')
+        
+        result = calculate_field_ghg(
+            field_id,
+            synthetic_n_kg=float(synthetic_n) if synthetic_n else None,
+            diesel_liters=float(diesel) if diesel else None
+        )
+        
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(result)
+
+
+class MicroClimateView(APIView):
+    """
+    Predict micro climate for a location.
+    
+    POST /api/analytics/microclimate/
+    """
+    
+    def post(self, request):
+        from analytics.ml_models import MicroClimatePredictor
+        
+        predictor = MicroClimatePredictor()
+        
+        result = predictor.predict(
+            global_temp=float(request.data.get('global_temp', 25)),
+            global_humidity=float(request.data.get('global_humidity', 60)),
+            global_pressure=float(request.data.get('global_pressure', 1013)),
+            wind_speed=float(request.data.get('wind_speed', 5)),
+            cloud_cover=float(request.data.get('cloud_cover', 0.5)),
+            elevation=float(request.data.get('elevation', 100)),
+            slope=float(request.data.get('slope', 2)),
+            aspect=float(request.data.get('aspect', 180)),
+            distance_to_water=float(request.data.get('distance_to_water', 1000)),
+            ndvi=float(request.data.get('ndvi', 0.5)),
+            hour_of_day=int(request.data.get('hour_of_day', 12)),
+            day_of_year=int(request.data.get('day_of_year', 180))
+        )
+        
+        return Response(result)

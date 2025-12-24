@@ -4,9 +4,13 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from .models import SensorReading, WeatherData
 from .serializers import SensorReadingSerializer
-from .thingsboard_client import ThingsBoardClient, FarmIoTManager, sync_farm_devices
+from .thingsboard_client import (
+    ThingsBoardClient, FarmIoTManager, sync_farm_devices,
+    login_thingsboard, get_device_keys, get_device_timeseries
+)
 from core.models import Device, Farm
 from django.db.models import Avg
+from django.conf import settings
 from datetime import datetime, timedelta
 
 
@@ -17,52 +21,97 @@ class SensorReadingViewSet(viewsets.ModelViewSet):
 
 
 class ThingsBoardSyncView(APIView):
-    """Sync IoT data from ThingsBoard using device tokens (GET endpoints only)"""
+    """
+    Sync IoT data from ThingsBoard using the telemetry plugin API.
+    
+    Uses endpoints:
+    - POST /api/auth/login - Authenticate and get JWT token
+    - GET /api/plugins/telemetry/DEVICE/{entityId}/keys/timeseries
+    - GET /api/plugins/telemetry/DEVICE/{entityId}/values/timeseries
+    """
     permission_classes = (AllowAny,)
 
     def get(self, request):
         """Get sync status and device info"""
         devices = Device.objects.all()
-        devices_with_token = devices.filter(token__isnull=False).exclude(token='')
+        devices_with_uuid = devices.filter(thingsboard_id__isnull=False)
         
         return Response({
-            'message': 'ThingsBoard IoT Sync',
+            'message': 'ThingsBoard IoT Sync (Plugin API)',
             'thingsboard_url': 'http://icarus.lums.edu.pk',
             'total_devices': devices.count(),
-            'devices_with_tokens': devices_with_token.count(),
+            'devices_with_thingsboard_id': devices_with_uuid.count(),
             'devices': [{
                 'id': d.id,
                 'name': d.name,
                 'type': d.device_type,
-                'has_token': bool(d.token),
+                'thingsboard_id': str(d.thingsboard_id) if d.thingsboard_id else None,
                 'farm': d.farm.name if d.farm else None
             } for d in devices[:20]],
             'instructions': 'POST to sync data from ThingsBoard',
-            'parameters': {
-                'farm_id': 'Optional - sync all devices for a farm',
-                'device_id': 'Optional - sync a specific device',
-                'token': 'Optional - test a specific token'
+            'required': {
+                'username': 'ThingsBoard username for authentication',
+                'password': 'ThingsBoard password for authentication'
+            },
+            'optional': {
+                'farm_id': 'Sync all devices for a farm',
+                'device_id': 'Sync a specific device',
+                'entity_id': 'Test with ThingsBoard device UUID directly'
             }
         })
 
     def post(self, request):
-        """Sync data from ThingsBoard"""
+        """Sync data from ThingsBoard using JWT authentication"""
         farm_id = request.data.get('farm_id')
         device_id = request.data.get('device_id')
-        token = request.data.get('token')
+        entity_id = request.data.get('entity_id')  # ThingsBoard UUID
         
-        client = ThingsBoardClient()
-        manager = FarmIoTManager()
+        # Get credentials from request or settings
+        username = request.data.get('username') or getattr(settings, 'THINGSBOARD_USERNAME', None)
+        password = request.data.get('password') or getattr(settings, 'THINGSBOARD_PASSWORD', None)
+        jwt_token = request.data.get('jwt_token')
         
-        # Test a specific token
-        if token:
-            result = client.get_latest_telemetry(token)
+        # Authenticate if no JWT provided
+        if not jwt_token:
+            if not username or not password:
+                return Response({
+                    'error': 'JWT token or credentials (username/password) required',
+                    'hint': 'Provide username and password for ThingsBoard authentication, or configure THINGSBOARD_USERNAME and THINGSBOARD_PASSWORD in settings'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Login to ThingsBoard
+            login_result = login_thingsboard(username, password)
+            if not login_result.get('success'):
+                return Response({
+                    'error': 'ThingsBoard authentication failed',
+                    'details': login_result.get('error')
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            jwt_token = login_result.get('token')
+        
+        # Test a specific ThingsBoard entity ID
+        if entity_id:
+            keys_result = get_device_keys(entity_id, jwt_token)
+            if not keys_result.get('success'):
+                return Response({
+                    'action': 'test_entity',
+                    'success': False,
+                    'error': keys_result.get('error')
+                })
+            
+            # Get latest values
+            data_result = get_device_timeseries(entity_id, jwt_token, keys=keys_result.get('keys'))
             return Response({
-                'action': 'test_token',
-                'success': result.get('success'),
-                'data': result.get('data', {}),
-                'error': result.get('error')
+                'action': 'test_entity',
+                'entity_id': entity_id,
+                'success': data_result.get('success'),
+                'keys': keys_result.get('keys'),
+                'data': data_result.get('latest_values', {}),
+                'error': data_result.get('error')
             })
+        
+        # Create manager with JWT
+        manager = FarmIoTManager(jwt_token=jwt_token)
         
         # Sync specific device
         if device_id:
@@ -80,17 +129,112 @@ class ThingsBoardSyncView(APIView):
         
         # Sync farm devices
         if farm_id:
-            result = sync_farm_devices(farm_id)
-            return Response({
-                'action': 'sync_farm',
-                'farm_id': farm_id,
-                **result
-            })
+            try:
+                farm = Farm.objects.get(id=farm_id)
+                result = manager.sync_all_devices(farm)
+                return Response({
+                    'action': 'sync_farm',
+                    'farm_id': farm_id,
+                    'farm_name': farm.name,
+                    **result
+                })
+            except Farm.DoesNotExist:
+                return Response({'error': f'Farm {farm_id} not found'}, 
+                              status=status.HTTP_404_NOT_FOUND)
         
         # Sync all devices
         result = manager.sync_all_devices()
         return Response({
             'action': 'sync_all',
+            **result
+        })
+
+
+class ThingsBoardHistoricalSyncView(APIView):
+    """
+    Sync historical IoT data from ThingsBoard.
+    
+    This endpoint pulls data from a specified date range (default: August 2024 to now).
+    """
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        """Sync historical data from ThingsBoard"""
+        # Get ThingsBoard credentials
+        username = request.data.get('username')
+        password = request.data.get('password')
+        
+        if not username or not password:
+            return Response({
+                'error': 'ThingsBoard username and password required in request body'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Login to ThingsBoard
+        login_result = login_thingsboard(username, password)
+        if not login_result.get('success'):
+            return Response({
+                'error': 'ThingsBoard login failed',
+                'details': login_result.get('error')
+            }, status=status.HTTP_401_UNAUTHORIZED)
+        
+        jwt_token = login_result.get('token')
+        
+        # Get parameters
+        device_id = request.data.get('device_id')
+        start_date = request.data.get('start_date')  # Format: YYYY-MM-DD
+        end_date = request.data.get('end_date')  # Format: YYYY-MM-DD
+        
+        if not device_id:
+            return Response({
+                'error': 'device_id is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get device
+        try:
+            device = Device.objects.get(id=device_id)
+        except Device.DoesNotExist:
+            return Response({
+                'error': f'Device {device_id} not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        if not device.thingsboard_id:
+            return Response({
+                'error': f'Device {device.name} has no ThingsBoard ID configured'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Parse dates
+        start_time = None
+        end_time = None
+        
+        if start_date:
+            try:
+                start_time = datetime.strptime(start_date, '%Y-%m-%d')
+            except ValueError:
+                return Response({
+                    'error': 'Invalid start_date format. Use YYYY-MM-DD'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        if end_date:
+            try:
+                end_time = datetime.strptime(end_date, '%Y-%m-%d')
+            except ValueError:
+                return Response({
+                    'error': 'Invalid end_date format. Use YYYY-MM-DD'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create manager and sync
+        manager = FarmIoTManager(jwt_token=jwt_token)
+        result = manager.sync_device_historical_data(
+            device=device,
+            start_time=start_time,
+            end_time=end_time
+        )
+        
+        return Response({
+            'action': 'sync_historical',
+            'device': device.name,
+            'device_id': str(device.id),
+            'thingsboard_id': str(device.thingsboard_id),
             **result
         })
 
@@ -118,11 +262,11 @@ class FarmSensorSummaryView(APIView):
 
 
 class SensorTimeSeriesView(APIView):
-    """Get time series sensor data for charts"""
+    """Get time series sensor data for charts - grouped by sensor"""
     permission_classes = (AllowAny,)
 
     def get(self, request, farm_id=None):
-        """Get time series data for the last 7 days"""
+        """Get time series data for all sensors in the farm"""
         if farm_id:
             try:
                 farm = Farm.objects.get(id=farm_id)
@@ -131,54 +275,117 @@ class SensorTimeSeriesView(APIView):
         else:
             farm = Farm.objects.first()
         
-        days = int(request.query_params.get('days', 7))
+        days_param = request.query_params.get('days', '7')
         
         # Get sensor readings
         from django.utils import timezone
-        start_date = timezone.now() - timedelta(days=days)
         
-        readings = SensorReading.objects.filter(
-            device__farm=farm,
-            timestamp__gte=start_date
-        ).order_by('timestamp')
+        # Handle "all" time or specific number of days
+        if days_param == 'all':
+            readings = SensorReading.objects.filter(
+                device__farm=farm
+            ).select_related('device').order_by('timestamp')
+            period_label = 'All Time'
+        else:
+            days = int(days_param)
+            start_date = timezone.now() - timedelta(days=days)
+            readings = SensorReading.objects.filter(
+                device__farm=farm,
+                timestamp__gte=start_date
+            ).select_related('device').order_by('timestamp')
+            period_label = f'Last {days} days'
         
-        weather = WeatherData.objects.filter(
-            farm=farm,
-            timestamp__gte=start_date
-        ).order_by('timestamp')
+        # Get all devices for this farm
+        devices = Device.objects.filter(farm=farm)
         
-        # Format for charts - using JSONField results
-        time_series = {
-            'farm_name': farm.name if farm else 'All Farms',
-            'period': f'Last {days} days',
-            'moisture': [],
-            'temperature': [],
-            'humidity': [],
-            'timestamps': []
-        }
+        # Group data by sensor/device
+        sensors_data = {}
+        all_timestamps = []
         
         for reading in readings:
-            # Use JSONField results or fallback to helper properties
+            device_id = reading.device_id
+            device_name = reading.device.name if reading.device else f'Sensor {device_id}'
+            
+            if device_id not in sensors_data:
+                sensors_data[device_id] = {
+                    'device_id': device_id,
+                    'device_name': device_name,
+                    'device_type': reading.device.device_type if reading.device else 'unknown',
+                    'thingsboard_id': str(reading.device.thingsboard_id) if reading.device and reading.device.thingsboard_id else None,
+                    'data': [],
+                    'keys': set()
+                }
+            
+            # Use JSONField results directly
             results = reading.results or {}
-            temp = results.get('temperature') or reading.temperature
-            moisture = results.get('moisture') or results.get('soil_moisture') or reading.moisture
+            
+            # Track all available keys
+            sensors_data[device_id]['keys'].update(results.keys())
+            
+            # Extract values with flexible key names
+            temp = (results.get('temperature') or 
+                    results.get('temp') or 
+                    reading.temperature)
+            
+            moisture = (results.get('soilMoisture_%') or 
+                       results.get('soilMoisture_adc') or
+                       results.get('soilMoisture') or 
+                       results.get('soil_moisture') or 
+                       results.get('moisture') or 
+                       reading.moisture)
+            
             humidity = results.get('humidity') or reading.humidity
             
-            if temp is not None:
-                time_series['temperature'].append(temp)
-            if moisture is not None:
-                time_series['moisture'].append(moisture)
-            if humidity is not None:
-                time_series['humidity'].append(humidity)
+            timestamp = reading.timestamp.isoformat() if reading.timestamp else None
             
-            time_series['timestamps'].append(reading.timestamp.isoformat() if reading.timestamp else None)
+            sensors_data[device_id]['data'].append({
+                'timestamp': timestamp,
+                'temperature': float(temp) if temp is not None else None,
+                'moisture': float(moisture) if moisture is not None else None,
+                'humidity': float(humidity) if humidity is not None else None,
+                'raw': results  # Include raw data for any other keys
+            })
+            
+            if timestamp and timestamp not in all_timestamps:
+                all_timestamps.append(timestamp)
         
-        # Add weather humidity data
-        for w in weather:
-            if w.humidity and w.humidity not in time_series['humidity']:
-                time_series['humidity'].append(w.humidity)
+        # Convert sets to lists for JSON serialization
+        for device_id in sensors_data:
+            sensors_data[device_id]['keys'] = list(sensors_data[device_id]['keys'])
+            sensors_data[device_id]['reading_count'] = len(sensors_data[device_id]['data'])
         
-        return Response(time_series)
+        # Sort timestamps
+        all_timestamps.sort()
+        
+        # Build legacy format for backward compatibility (combined data)
+        combined_moisture = []
+        combined_temperature = []
+        combined_timestamps = []
+        
+        for reading in readings:
+            results = reading.results or {}
+            temp = (results.get('temperature') or results.get('temp') or reading.temperature)
+            moisture = (results.get('soilMoisture_%') or results.get('soilMoisture_adc') or
+                       results.get('soilMoisture') or results.get('soil_moisture') or 
+                       results.get('moisture') or reading.moisture)
+            
+            if temp is not None:
+                combined_temperature.append(float(temp))
+            if moisture is not None:
+                combined_moisture.append(float(moisture))
+            combined_timestamps.append(reading.timestamp.isoformat() if reading.timestamp else None)
+        
+        return Response({
+            'farm_name': farm.name if farm else 'All Farms',
+            'period': period_label,
+            'sensor_count': len(sensors_data),
+            'sensors': list(sensors_data.values()),
+            # Legacy format for backward compatibility
+            'moisture': combined_moisture,
+            'temperature': combined_temperature,
+            'timestamps': combined_timestamps,
+            'available_keys': list(set().union(*[set(s['keys']) for s in sensors_data.values()])) if sensors_data else []
+        })
 
 
 class ThingsBoardTimeSeriesView(APIView):

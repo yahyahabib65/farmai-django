@@ -188,8 +188,25 @@ class PlanetaryComputerDownloader:
             aoi_shape = shape(aoi)
             
             with rasterio.open(band_url) as src:
+                # Transform AOI to match raster CRS if different
+                raster_crs = src.crs
+                
+                # AOI is typically in WGS84 (EPSG:4326)
+                aoi_crs = pyproj.CRS.from_epsg(4326)
+                
+                if raster_crs and str(raster_crs) != str(aoi_crs):
+                    # Need to reproject AOI to match raster CRS
+                    project = pyproj.Transformer.from_crs(
+                        aoi_crs, 
+                        raster_crs, 
+                        always_xy=True
+                    ).transform
+                    aoi_shape_transformed = transform(project, aoi_shape)
+                else:
+                    aoi_shape_transformed = aoi_shape
+                
                 # Clip to AOI
-                out_image, out_transform = mask(src, [aoi_shape], crop=True)
+                out_image, out_transform = mask(src, [aoi_shape_transformed], crop=True)
                 out_meta = src.meta.copy()
                 
                 out_meta.update({
@@ -210,6 +227,48 @@ class PlanetaryComputerDownloader:
         except Exception as e:
             print(f"Error downloading/clipping band {band_name}: {e}")
             return None
+    
+    def _get_existing_dates(self, farm_id: int) -> set:
+        """
+        Get set of dates that already have satellite imagery downloaded.
+        Checks both local storage and MinIO.
+        
+        Args:
+            farm_id: Farm ID to check
+            
+        Returns:
+            Set of date strings (YYYY-MM-DD format)
+        """
+        existing_dates = set()
+        
+        # Check local storage
+        local_path = os.path.join(settings.MEDIA_ROOT, 'uploads', 'satellite', str(farm_id))
+        if os.path.exists(local_path):
+            for item in os.listdir(local_path):
+                item_path = os.path.join(local_path, item)
+                # Check if it's a date folder (YYYY-MM-DD format)
+                if os.path.isdir(item_path) and len(item) == 10 and '-' in item:
+                    # Verify it has band files
+                    tif_files = [f for f in os.listdir(item_path) if f.endswith('.tif')]
+                    if tif_files:
+                        existing_dates.add(item)
+        
+        # Check MinIO
+        if self.minio_client:
+            try:
+                prefix = f"farm_{farm_id}/"
+                objects = self.minio_client.list_objects(self.bucket_name, prefix=prefix, recursive=False)
+                for obj in objects:
+                    # Extract date from path like "farm_1/2025-11-27/"
+                    parts = obj.object_name.split('/')
+                    if len(parts) >= 2:
+                        date_str = parts[1]
+                        if len(date_str) == 10 and '-' in date_str:
+                            existing_dates.add(date_str)
+            except Exception as e:
+                print(f"Error checking MinIO for existing dates: {e}")
+        
+        return existing_dates
     
     def download_imagery_for_farm(self, farm, field_boundary=None, 
                                    target_date: datetime = None,
@@ -283,9 +342,26 @@ class PlanetaryComputerDownloader:
         # Sort by date (ascending) to process in chronological order
         images = sorted(images, key=lambda x: x.get('datetime', ''))
         
+        # Get list of dates already downloaded locally
+        existing_dates = self._get_existing_dates(farm.id)
+        skipped_dates = []
+        
         if download_all:
-            # Download ALL images in the date range
+            # Download ALL images in the date range (skip existing)
             for image in images:
+                image_datetime = image.get('datetime', '')
+                if image_datetime:
+                    try:
+                        dt = datetime.fromisoformat(image_datetime.replace('Z', '+00:00'))
+                        date_str = dt.strftime('%Y-%m-%d')
+                        
+                        # Skip if already exists locally
+                        if date_str in existing_dates:
+                            skipped_dates.append(date_str)
+                            continue
+                    except:
+                        pass
+                
                 download_result = self._download_single_image(farm, boundary, image)
                 if download_result.get('success'):
                     result['images_downloaded'] += 1
@@ -293,18 +369,34 @@ class PlanetaryComputerDownloader:
                     result['minio_paths'].extend(download_result.get('minio_paths', []))
                     result['downloaded_dates'].append(download_result.get('date'))
         else:
-            # Download only the best (lowest cloud cover) image
-            best_image = sorted(images, key=lambda x: x.get('cloud_cover', 100))[0]
-            download_result = self._download_single_image(farm, boundary, best_image)
-            if download_result.get('success'):
-                result['images_downloaded'] = 1
-                result['total_bands_downloaded'] = download_result.get('bands_downloaded', 0)
-                result['minio_paths'] = download_result.get('minio_paths', [])
-                result['downloaded_dates'] = [download_result.get('date')]
-                result['cloud_cover'] = best_image.get('cloud_cover', 0)
-                result['image_id'] = best_image['id']
+            # Download only the best (lowest cloud cover) image that doesn't exist
+            for image in sorted(images, key=lambda x: x.get('cloud_cover', 100)):
+                image_datetime = image.get('datetime', '')
+                if image_datetime:
+                    try:
+                        dt = datetime.fromisoformat(image_datetime.replace('Z', '+00:00'))
+                        date_str = dt.strftime('%Y-%m-%d')
+                        
+                        # Skip if already exists locally
+                        if date_str in existing_dates:
+                            skipped_dates.append(date_str)
+                            continue
+                    except:
+                        pass
+                
+                download_result = self._download_single_image(farm, boundary, image)
+                if download_result.get('success'):
+                    result['images_downloaded'] = 1
+                    result['total_bands_downloaded'] = download_result.get('bands_downloaded', 0)
+                    result['minio_paths'] = download_result.get('minio_paths', [])
+                    result['downloaded_dates'] = [download_result.get('date')]
+                    result['cloud_cover'] = image.get('cloud_cover', 0)
+                    result['image_id'] = image['id']
+                    break
         
-        result['success'] = result['images_downloaded'] > 0
+        result['success'] = result['images_downloaded'] > 0 or len(skipped_dates) > 0
+        result['skipped_dates'] = skipped_dates
+        result['existing_dates'] = list(existing_dates)
         result['date_range'] = {
             'start': start_date.strftime('%Y-%m-%d'),
             'end': end_date.strftime('%Y-%m-%d')
