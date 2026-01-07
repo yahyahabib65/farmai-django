@@ -476,7 +476,7 @@ def analyze_field_ndvi_timeseries(field_id: int,
     Returns:
         Complete time-series analysis results
     """
-    from analytics.models import AnalyticsResult
+    from imagery.models import ImageReading
     from core.models import FieldBoundary
     
     try:
@@ -484,18 +484,18 @@ def analyze_field_ndvi_timeseries(field_id: int,
     except FieldBoundary.DoesNotExist:
         return {'error': f'Field {field_id} not found'}
     
-    # Get NDVI analytics results for this field
-    queryset = AnalyticsResult.objects.filter(
+    # Get NDVI/NDWI data from ImageReading (real satellite data from MinIO)
+    queryset = ImageReading.objects.filter(
         field=field,
-        avg_ndvi__isnull=False
-    ).order_by('analysis_date')
+        ndvi_mean__isnull=False
+    ).order_by('acquisition_date')
     
     if start_date:
-        queryset = queryset.filter(analysis_date__gte=start_date)
+        queryset = queryset.filter(acquisition_date__gte=start_date)
     if end_date:
-        queryset = queryset.filter(analysis_date__lte=end_date)
+        queryset = queryset.filter(acquisition_date__lte=end_date)
     
-    results = list(queryset.values('analysis_date', 'avg_ndvi'))
+    results = list(queryset.values('acquisition_date', 'ndvi_mean', 'ndwi_mean'))
     
     if len(results) < 5:
         return {
@@ -505,8 +505,9 @@ def analyze_field_ndvi_timeseries(field_id: int,
             'data_points': len(results)
         }
     
-    dates = [r['analysis_date'] for r in results]
-    ndvi_values = [r['avg_ndvi'] for r in results]
+    dates = [r['acquisition_date'] for r in results]
+    ndvi_values = [r['ndvi_mean'] for r in results]
+    ndwi_values = [r['ndwi_mean'] for r in results]
     
     # Initialize time-series analyzer
     ts = NDVITimeSeries(dates, ndvi_values)
@@ -526,6 +527,7 @@ def analyze_field_ndvi_timeseries(field_id: int,
         'land_degradation': ts.detect_land_degradation(),
         'raw_data': {
             'dates': [d.isoformat() for d in dates],
-            'ndvi_values': ndvi_values
+            'ndvi_values': ndvi_values,
+            'ndwi_values': ndwi_values
         }
     }

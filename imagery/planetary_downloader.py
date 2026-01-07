@@ -49,13 +49,28 @@ class PlanetaryComputerDownloader:
     
     STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
     
-    # Sentinel-2 bands for NDVI calculation
+    # ALL Sentinel-2 spectral bands for comprehensive analysis
     BANDS = {
-        'red': 'B04',      # Red band (665nm)
-        'green': 'B03',    # Green band (560nm)
-        'blue': 'B02',     # Blue band (490nm)
-        'nir': 'B08',      # NIR band (842nm)
-        'swir': 'B11',     # SWIR band for NDWI
+        # 10m resolution bands
+        'blue': 'B02',       # Blue (490nm) - 10m
+        'green': 'B03',      # Green (560nm) - 10m
+        'red': 'B04',        # Red (665nm) - 10m
+        'nir': 'B08',        # NIR (842nm) - 10m - Primary for NDVI
+        
+        # 20m resolution bands
+        'rededge1': 'B05',   # Red Edge 1 (705nm) - 20m
+        'rededge2': 'B06',   # Red Edge 2 (740nm) - 20m
+        'rededge3': 'B07',   # Red Edge 3 (783nm) - 20m
+        'nir_narrow': 'B8A', # NIR Narrow (865nm) - 20m
+        'swir1': 'B11',      # SWIR 1 (1610nm) - 20m - For NDWI/moisture
+        'swir2': 'B12',      # SWIR 2 (2190nm) - 20m - For geology/moisture
+        
+        # 60m resolution bands (atmospheric)
+        'coastal': 'B01',    # Coastal/Aerosol (443nm) - 60m
+        'watervapor': 'B09', # Water Vapor (945nm) - 60m
+        
+        # Scene Classification
+        'scl': 'SCL',        # Scene Classification Layer - 20m
     }
     
     def __init__(self, minio_endpoint: str = None, minio_access_key: str = None, 
@@ -445,7 +460,7 @@ class PlanetaryComputerDownloader:
                     if band_data:
                         downloaded_bands[band_key] = band_data
                         
-                        # Store in MinIO
+                        # Store in MinIO (primary storage)
                         if self.minio_client:
                             minio_path = f"farm_{farm.id}/{date_str}/{band_key}_{band_id}.tif"
                             try:
@@ -459,15 +474,15 @@ class PlanetaryComputerDownloader:
                                 result['minio_paths'].append(minio_path)
                             except Exception as e:
                                 print(f"MinIO upload error for {minio_path}: {e}")
-                        
-                        # Also save locally as backup
-                        local_path = os.path.join(
-                            settings.MEDIA_ROOT, 'uploads', 'satellite', 
-                            str(farm.id), date_str
-                        )
-                        os.makedirs(local_path, exist_ok=True)
-                        with open(os.path.join(local_path, f"{band_key}_{band_id}.tif"), 'wb') as f:
-                            f.write(band_data)
+                        else:
+                            # Fallback to local only if MinIO not available
+                            local_path = os.path.join(
+                                settings.MEDIA_ROOT, 'uploads', 'satellite', 
+                                str(farm.id), date_str
+                            )
+                            os.makedirs(local_path, exist_ok=True)
+                            with open(os.path.join(local_path, f"{band_key}_{band_id}.tif"), 'wb') as f:
+                                f.write(band_data)
             
             result['success'] = len(downloaded_bands) > 0
             result['bands_downloaded'] = len(downloaded_bands)

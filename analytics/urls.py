@@ -7,7 +7,8 @@ from .views import (
     WeedDetectionView,
     SensorPlacementView,
     GHGCalculatorView,
-    MicroClimateView
+    MicroClimateView,
+    YieldPredictionView
 )
 
 urlpatterns = [
@@ -32,4 +33,7 @@ urlpatterns = [
     
     # Micro Climate Prediction
     path('microclimate/', MicroClimateView.as_view(), name='microclimate'),
+    
+    # Yield Prediction (based on real satellite NDVI data)
+    path('yield/<int:field_id>/', YieldPredictionView.as_view(), name='yield-prediction'),
 ]

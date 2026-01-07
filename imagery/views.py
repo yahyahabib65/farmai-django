@@ -299,35 +299,35 @@ class AnalyticsView(APIView):
             if not objects:
                 return None
             
-            # Find a suitable image (prefer NIR band for NDVI)
-            target_obj = None
+            # Download ALL bands to temp directory for processing
+            temp_dir = tempfile.mkdtemp()
+            downloaded_files = []
+            nir_file = None
+            
             for obj in objects:
                 obj_name = obj.object_name.lower()
-                if 'nir' in obj_name or 'b08' in obj_name:
-                    target_obj = obj
-                    break
+                if obj_name.endswith(('.tif', '.tiff')):
+                    local_path = os.path.join(temp_dir, os.path.basename(obj.object_name))
+                    minio_client.fget_object(bucket_name, obj.object_name, local_path)
+                    downloaded_files.append(local_path)
+                    
+                    # Track NIR file for primary path
+                    if 'nir' in obj_name or 'b08' in obj_name:
+                        nir_file = local_path
             
-            # If no NIR found, use first TIFF
-            if not target_obj:
-                for obj in objects:
-                    if obj.object_name.lower().endswith(('.tif', '.tiff')):
-                        target_obj = obj
-                        break
-            
-            if not target_obj:
+            if not downloaded_files:
                 return None
             
-            # Download to temp file
-            temp_dir = tempfile.mkdtemp()
-            local_path = os.path.join(temp_dir, os.path.basename(target_obj.object_name))
-            
-            minio_client.fget_object(bucket_name, target_obj.object_name, local_path)
+            # Use NIR file as primary, or first file if no NIR
+            primary_file = nir_file or downloaded_files[0]
             
             return {
-                'path': local_path,
-                'minio_path': f"{bucket_name}/{target_obj.object_name}",
+                'path': primary_file,
+                'folder': temp_dir,
+                'minio_path': f"{bucket_name}/{prefix}",
                 'date': date,
-                'all_objects': [obj.object_name for obj in objects]
+                'all_objects': [obj.object_name for obj in objects],
+                'downloaded_files': downloaded_files
             }
         except Exception as e:
             print(f"MinIO fetch error: {e}")
@@ -422,6 +422,7 @@ class AnalyticsView(APIView):
         field_results = []
         harvest_predictions = []
         crop_classifications = []
+        yield_predictions = []  # Yield prediction based on real NDVI data
         raw_calculations = []  # Store raw NDVI/NDWI calculation details
         
         # SMART DOWNLOAD LOGIC: Always check Planetary Computer and download missing images
@@ -433,17 +434,23 @@ class AnalyticsView(APIView):
         download_skipped = False
         date_filter_applied = bool(start_date or end_date)
         
+        minio_folder = None  # Track folder with all bands
+        
         # If image source is MinIO, fetch the image from MinIO first
         if requested_image_source == 'minio' and start_date:
             minio_image = self._fetch_from_minio(farm.id, start_date)
             if minio_image:
                 latest_image = minio_image.get('path')
+                minio_folder = minio_image.get('folder')  # Folder with all downloaded bands
                 image_source = 'minio'
+                bands_count = len(minio_image.get('downloaded_files', []))
                 planetary_info = {
                     'source': 'MinIO Object Storage',
                     'image_date': start_date,
-                    'status': f'Using imagery from MinIO storage',
-                    'minio_path': minio_image.get('minio_path')
+                    'status': f'Using imagery from MinIO storage ({bands_count} bands)',
+                    'minio_path': minio_image.get('minio_path'),
+                    'bands_downloaded': bands_count,
+                    'bands_available': bands_count  # For dashboard display
                 }
         
         # Step 1: If auto_download enabled AND we don't have a MinIO image, sync with Planetary Computer
@@ -594,8 +601,9 @@ class AnalyticsView(APIView):
                     })
             
             # Try separate bands processor for satellite imagery folders
+            # Use minio_folder if available (all bands downloaded from MinIO)
             if not image_processed and latest_image:
-                folder_path = os.path.dirname(latest_image)
+                folder_path = minio_folder if minio_folder else os.path.dirname(latest_image)
                 image_results = calculate_ndvi_from_separate_bands(folder_path)
                 if image_results.get('success'):
                     image_processed = True
@@ -622,6 +630,7 @@ class AnalyticsView(APIView):
         
         # Determine the actual analysis date (use image date if available, otherwise today)
         analysis_date = datetime.now().date()
+        image_date_str = None
         if planetary_info:
             image_date_str = planetary_info.get('using_image_date') or planetary_info.get('image_date')
             if image_date_str and image_date_str != 'Unknown':
@@ -630,15 +639,45 @@ class AnalyticsView(APIView):
                 except:
                     pass
         
+        # Generate NDVI/NDWI visualization images
+        ndvi_image_url = None
+        ndwi_image_url = None
+        if image_processed and image_date_str and image_date_str != 'Unknown':
+            from imagery.ndvi_processor import generate_ndvi_image
+            media_root = getattr(settings, 'MEDIA_ROOT', 'media')
+            
+            # Use minio_folder if available (all bands already downloaded)
+            # Otherwise use local folder
+            folder_for_viz = minio_folder if minio_folder else (os.path.dirname(latest_image) if latest_image else None)
+            
+            if folder_for_viz:
+                viz_result = generate_ndvi_image(folder_for_viz, media_root, farm.id, image_date_str)
+                if viz_result.get('success'):
+                    # Use the MinIO URLs returned from generate_ndvi_image
+                    ndvi_image_url = viz_result.get('ndvi_image_url')
+                    ndwi_image_url = viz_result.get('ndwi_image_url')
+        
         # === WORKFLOW 1: NDVI/NDWI Analysis (Vegetation & Water Indices) ===
         for field in fields:
-            # Use real calculations if available, otherwise generate sample data
+            # Use real data from ImageReading (MinIO satellite data) or image_results
             if image_processed and image_results:
                 ndvi_value = image_results.get('ndvi_mean', 0.5)
                 ndwi_value = image_results.get('ndwi_mean', 0.1)
             else:
-                ndvi_value = round(random.uniform(0.3, 0.85), 3)
-                ndwi_value = round(random.uniform(-0.2, 0.4), 3)
+                # Get real data from ImageReading database
+                from imagery.models import ImageReading
+                latest_reading = ImageReading.objects.filter(field=field).order_by('-acquisition_date').first()
+                if latest_reading:
+                    ndvi_value = round(latest_reading.ndvi_mean, 3) if latest_reading.ndvi_mean else 0.5
+                    ndwi_value = round(latest_reading.ndwi_mean, 3) if latest_reading.ndwi_mean else 0.1
+                else:
+                    # Fallback to farm-level average if no field-specific reading
+                    farm_avg = ImageReading.objects.filter(farm=farm).aggregate(
+                        avg_ndvi=models.Avg('ndvi_mean'),
+                        avg_ndwi=models.Avg('ndwi_mean')
+                    )
+                    ndvi_value = round(farm_avg['avg_ndvi'] or 0.5, 3)
+                    ndwi_value = round(farm_avg['avg_ndwi'] or 0.1, 3)
             
             # Determine health status based on NDVI
             health_status, health_color = get_health_status(ndvi_value)
@@ -663,13 +702,30 @@ class AnalyticsView(APIView):
             )
             
             # === WORKFLOW 2: Crop Classification ===
-            crop_types = ['Wheat', 'Rice', 'Cotton', 'Sugarcane', 'Maize', 'Vegetables']
-            detected_crop = field.crop_type if field.crop_type else random.choice(crop_types)
-            crop_confidence = round(random.uniform(0.82, 0.98), 2)
-            healthy_pct = round(random.uniform(60, 95), 1)
-            stressed_pct = round(random.uniform(2, 20), 1)
-            bare_soil_pct = round(100 - healthy_pct - stressed_pct - random.uniform(1, 5), 1)
-            water_pct = round(100 - healthy_pct - stressed_pct - bare_soil_pct, 1)
+            # Use field's actual crop type (required, no random fallback)
+            detected_crop = field.crop_type if field.crop_type else 'Unknown'
+            
+            # Calculate healthy/stressed percentages based on real NDVI value
+            # NDVI thresholds: >0.6 healthy, 0.3-0.6 moderate, <0.3 stressed
+            if ndvi_value >= 0.6:
+                healthy_pct = round(min(95, 60 + (ndvi_value - 0.6) * 100), 1)
+                stressed_pct = round(max(2, 15 - (ndvi_value - 0.6) * 40), 1)
+            elif ndvi_value >= 0.3:
+                healthy_pct = round(40 + (ndvi_value - 0.3) * 66, 1)
+                stressed_pct = round(35 - (ndvi_value - 0.3) * 50, 1)
+            else:
+                healthy_pct = round(max(10, ndvi_value * 130), 1)
+                stressed_pct = round(min(50, 50 - ndvi_value * 50), 1)
+            
+            bare_soil_pct = round(max(0, 100 - healthy_pct - stressed_pct - 5), 1)
+            water_pct = round(max(0, 100 - healthy_pct - stressed_pct - bare_soil_pct), 1)
+            
+            # Confidence based on data quality (use ImageReading valid_pixel_percentage if available)
+            from imagery.models import ImageReading
+            latest_reading = ImageReading.objects.filter(field=field).order_by('-acquisition_date').first()
+            crop_confidence = 0.85  # Base confidence
+            if latest_reading and latest_reading.valid_pixel_percentage:
+                crop_confidence = round(min(0.98, latest_reading.valid_pixel_percentage / 100), 2)
             
             crop_class, _ = CropClassification.objects.update_or_create(
                 field=field,
@@ -693,29 +749,120 @@ class AnalyticsView(APIView):
             })
             
             # === WORKFLOW 3: Harvest Prediction ===
-            growth_stages = ['Germination', 'Seedling', 'Vegetative', 'Flowering', 'Fruiting', 'Ripening']
-            current_stage = random.choice(growth_stages[2:5])  # Mid-stages are more common
-            days_to_harvest = random.randint(15, 90)
+            # Determine growth stage based on NDVI time series pattern
+            # Higher NDVI = more vegetative growth, NDVI peak then decline = approaching maturity
+            readings = ImageReading.objects.filter(field=field).order_by('acquisition_date')
+            readings_list = list(readings.values('acquisition_date', 'ndvi_mean'))
             
-            harvest_pred, _ = HarvestPrediction.objects.update_or_create(
-                field=field,
-                defaults={
-                    'planting_date': datetime.now().date() - timedelta(days=random.randint(30, 90)),
-                    'predicted_emergence_date': datetime.now().date() - timedelta(days=random.randint(20, 80)),
-                    'predicted_harvest_date': datetime.now().date() + timedelta(days=days_to_harvest),
-                    'current_growth_stage': current_stage,
-                    'days_to_harvest': days_to_harvest,
-                    'confidence_score': round(random.uniform(0.75, 0.95), 2)
-                }
-            )
+            if len(readings_list) >= 3:
+                # Analyze NDVI trend to determine growth stage
+                recent_ndvi = [r['ndvi_mean'] for r in readings_list[-3:] if r['ndvi_mean']]
+                if recent_ndvi:
+                    avg_recent = sum(recent_ndvi) / len(recent_ndvi)
+                    ndvi_trend = recent_ndvi[-1] - recent_ndvi[0] if len(recent_ndvi) > 1 else 0
+                    
+                    # Determine stage based on NDVI level and trend
+                    if avg_recent < 0.2:
+                        current_stage = 'Germination'
+                    elif avg_recent < 0.35:
+                        current_stage = 'Seedling' if ndvi_trend > 0 else 'Ripening'
+                    elif avg_recent < 0.5:
+                        current_stage = 'Vegetative' if ndvi_trend >= 0 else 'Fruiting'
+                    elif avg_recent < 0.65:
+                        current_stage = 'Flowering' if ndvi_trend <= 0.05 else 'Vegetative'
+                    else:
+                        current_stage = 'Flowering' if ndvi_trend < 0 else 'Vegetative'
+                    
+                    # Estimate days to harvest based on stage
+                    stage_to_days = {'Germination': 120, 'Seedling': 100, 'Vegetative': 75, 
+                                     'Flowering': 50, 'Fruiting': 30, 'Ripening': 15}
+                    days_to_harvest = stage_to_days.get(current_stage, 60)
+                    
+                    # Calculate planting date based on first reading
+                    first_reading_date = readings_list[0]['acquisition_date']
+                    planting_date = first_reading_date - timedelta(days=14)  # Assume planting 2 weeks before first reading
+                else:
+                    current_stage = 'Vegetative'
+                    days_to_harvest = 60
+                    planting_date = datetime.now().date() - timedelta(days=45)
+            else:
+                # Not enough data - use existing HarvestPrediction if available
+                existing_pred = HarvestPrediction.objects.filter(field=field).first()
+                if existing_pred:
+                    current_stage = existing_pred.current_growth_stage
+                    days_to_harvest = existing_pred.days_to_harvest or 60
+                    planting_date = existing_pred.planting_date
+                else:
+                    current_stage = 'Unknown'
+                    days_to_harvest = None
+                    planting_date = None
+            
+            # Only create/update prediction if we have real data
+            if planting_date and days_to_harvest:
+                harvest_pred, _ = HarvestPrediction.objects.update_or_create(
+                    field=field,
+                    defaults={
+                        'planting_date': planting_date,
+                        'predicted_emergence_date': planting_date + timedelta(days=10) if planting_date else None,
+                        'predicted_harvest_date': datetime.now().date() + timedelta(days=days_to_harvest),
+                        'current_growth_stage': current_stage.lower() if current_stage != 'Unknown' else 'vegetative',
+                        'days_to_harvest': days_to_harvest,
+                        'confidence_score': 0.85 if len(readings_list) >= 5 else 0.70
+                    }
+                )
             
             harvest_predictions.append({
                 'field': field.name,
                 'crop': detected_crop,
                 'growth_stage': current_stage,
-                'days_to_harvest': days_to_harvest,
-                'expected_harvest': (datetime.now() + timedelta(days=days_to_harvest)).strftime('%B %d, %Y')
+                'days_to_harvest': days_to_harvest if days_to_harvest else 'Unknown',
+                'expected_harvest': (datetime.now() + timedelta(days=days_to_harvest)).strftime('%B %d, %Y') if days_to_harvest else 'Insufficient data'
             })
+            
+            # === WORKFLOW 4: Yield Prediction (ML-based, using real NDVI data) ===
+            from analytics.ml_models import YieldPredictor
+            from iot.models import WeatherData
+            
+            # Get real NDVI series for yield prediction
+            ndvi_for_yield = [r['ndvi_mean'] for r in readings_list if r.get('ndvi_mean')]
+            ndwi_for_yield = list(ImageReading.objects.filter(field=field).values_list('ndwi_mean', flat=True))
+            ndwi_for_yield = [n for n in ndwi_for_yield if n is not None]
+            
+            if len(ndvi_for_yield) >= 3:
+                # Get area (use minimum 1 hectare if area is too small or not set)
+                area_ha = float(field.area_hectares) if field.area_hectares and field.area_hectares > 0.01 else 1.0
+                
+                # Get weather data
+                weather = WeatherData.objects.filter(farm=farm).order_by('-timestamp')[:30]
+                temp_series = [w.temperature for w in weather if w.temperature]
+                precip_total = sum([w.precipitation or 0 for w in weather])
+                
+                yield_predictor = YieldPredictor()
+                yield_result = yield_predictor.predict(
+                    ndvi_series=ndvi_for_yield,
+                    ndwi_series=ndwi_for_yield,
+                    crop_type=detected_crop,
+                    area_ha=area_ha,
+                    temperature_series=temp_series if temp_series else None,
+                    precipitation_total=precip_total if precip_total > 0 else None
+                )
+                
+                yield_predictions.append({
+                    'field': field.name,
+                    'crop': detected_crop,
+                    'predicted_yield_tonnes': yield_result.get('predicted_yield_tonnes'),
+                    'yield_per_ha_kg': yield_result.get('yield_per_ha_kg'),
+                    'yield_range': yield_result.get('yield_range', {}),
+                    'confidence': yield_result.get('confidence'),
+                    'data_quality': yield_result.get('data_quality', {})
+                })
+            else:
+                yield_predictions.append({
+                    'field': field.name,
+                    'crop': detected_crop,
+                    'predicted_yield_tonnes': 'Insufficient data',
+                    'message': f'Need at least 3 satellite readings, found {len(ndvi_for_yield)}'
+                })
             
             field_results.append({
                 'field_name': field.name,
@@ -726,104 +873,128 @@ class AnalyticsView(APIView):
                 'health_color': health_color,
                 'water_status': water_status,
                 'growth_stage': current_stage,
-                'days_to_harvest': days_to_harvest,
+                'days_to_harvest': days_to_harvest if days_to_harvest else 'Unknown',
                 'recommendation': self._get_recommendation(ndvi_value, ndwi_value, current_stage)
             })
         
-        # If no fields, create sample results
+        # If no fields, return empty results with message
         if not field_results:
-            ndvi_val = round(random.uniform(0.4, 0.75), 3)
-            ndwi_val = round(random.uniform(-0.1, 0.3), 3)
-            field_results.append({
-                'field_name': 'Farm Overview',
-                'crop_type': 'Mixed',
-                'ndvi': ndvi_val,
-                'ndwi': ndwi_val,
-                'health_status': 'Healthy',
-                'health_color': 'green',
-                'water_status': 'Good water content',
-                'growth_stage': 'Vegetative',
-                'days_to_harvest': 45,
-                'recommendation': 'Continue current practices. Crops are healthy.'
-            })
-            harvest_predictions.append({
-                'field': 'Main Field',
-                'crop': 'Wheat',
-                'growth_stage': 'Vegetative',
-                'days_to_harvest': 45,
-                'expected_harvest': (datetime.now() + timedelta(days=45)).strftime('%B %d, %Y')
-            })
-            crop_classifications.append({
-                'field': 'Main Field',
-                'detected_crop': 'Wheat',
-                'confidence': '92%',
-                'healthy_area': '85%',
-                'stressed_area': '8%'
-            })
+            # Get farm-level averages from ImageReading
+            from imagery.models import ImageReading
+            farm_readings = ImageReading.objects.filter(farm=farm)
+            if farm_readings.exists():
+                avg_data = farm_readings.aggregate(
+                    avg_ndvi=models.Avg('ndvi_mean'),
+                    avg_ndwi=models.Avg('ndwi_mean')
+                )
+                ndvi_val = round(avg_data['avg_ndvi'] or 0.5, 3)
+                ndwi_val = round(avg_data['avg_ndwi'] or 0.1, 3)
+                health_status, health_color = get_health_status(ndvi_val)
+                
+                field_results.append({
+                    'field_name': 'Farm Overview (aggregated)',
+                    'crop_type': 'Mixed',
+                    'ndvi': ndvi_val,
+                    'ndwi': ndwi_val,
+                    'health_status': health_status,
+                    'health_color': health_color,
+                    'water_status': 'Good water content' if ndwi_val >= 0.1 else 'Moderate water content' if ndwi_val >= 0 else 'Low water',
+                    'growth_stage': 'Vegetative',
+                    'days_to_harvest': 'No field data',
+                    'recommendation': 'Please create field boundaries for detailed analysis.'
+                })
+            # Don't add fake harvest predictions or crop classifications
         
         # === WORKFLOW 4: Weather Forecast ===
-        weather_conditions = ['Sunny', 'Partly Cloudy', 'Cloudy', 'Light Rain', 'Clear']
+        # Use REAL weather data from database
         weather_forecast = []
-        for i in range(7):
-            forecast_date = datetime.now() + timedelta(days=i)
-            temp = round(random.uniform(20, 38), 1)
-            humidity = round(random.uniform(40, 85), 0)
-            precip = round(random.uniform(0, 15), 1) if random.random() > 0.6 else 0
-            
-            # Save weather data
-            if i == 0:  # Save today's weather
-                WeatherData.objects.update_or_create(
-                    farm=farm,
-                    timestamp=datetime.now(),
-                    defaults={
-                        'temperature': temp,
-                        'humidity': humidity,
-                        'precipitation': precip,
-                        'wind_speed': round(random.uniform(5, 25), 1),
-                        'conditions': random.choice(weather_conditions),
-                        'source': 'AI Forecast'
-                    }
-                )
-            
+        recent_weather = WeatherData.objects.filter(farm=farm).order_by('-timestamp')[:7]
+        
+        if recent_weather.exists():
+            # Use real historical weather data
+            for i, weather in enumerate(recent_weather):
+                weather_forecast.append({
+                    'date': weather.timestamp.strftime('%a, %b %d'),
+                    'temperature': f"{weather.temperature}°C" if weather.temperature else 'N/A',
+                    'humidity': f"{weather.humidity}%" if weather.humidity else 'N/A',
+                    'precipitation': f"{weather.precipitation}mm" if weather.precipitation else '0mm',
+                    'conditions': weather.conditions if weather.conditions else 'Unknown'
+                })
+        else:
+            # No weather data available - return empty with message
             weather_forecast.append({
-                'date': forecast_date.strftime('%a, %b %d'),
-                'temperature': f"{temp}°C",
-                'humidity': f"{humidity}%",
-                'precipitation': f"{precip}mm",
-                'conditions': random.choice(weather_conditions)
+                'date': datetime.now().strftime('%a, %b %d'),
+                'temperature': 'No data',
+                'humidity': 'No data',
+                'precipitation': 'No data',
+                'conditions': 'No weather data available. Connect weather sensors or API.'
             })
         
         # === WORKFLOW 5: Carbon Footprint & Sustainability ===
+        # Use REAL carbon data from database if available
         seasons = ['Rabi', 'Kharif']
         current_season = seasons[0] if datetime.now().month in [10, 11, 12, 1, 2, 3] else seasons[1]
         
-        total_emissions = round(random.uniform(1500, 4000), 0)
-        carbon_sequestration = round(random.uniform(500, 2000), 0)
-        net_carbon = total_emissions - carbon_sequestration
+        # Try to get existing real carbon data
+        existing_carbon = CarbonFootprint.objects.filter(
+            farm=farm, 
+            year=datetime.now().year
+        ).order_by('-id').first()
         
-        carbon_data, _ = CarbonFootprint.objects.update_or_create(
-            farm=farm,
-            year=datetime.now().year,
-            season=current_season,
-            defaults={
-                'total_emissions': total_emissions,
-                'soil_carbon_sequestration': carbon_sequestration,
-                'net_carbon': net_carbon,
-                'fertilizer_emissions': round(random.uniform(300, 800), 0),
-                'fuel_emissions': round(random.uniform(200, 600), 0),
-                'livestock_emissions': round(random.uniform(100, 500), 0),
-                'crop_residue_emissions': round(random.uniform(50, 200), 0),
-                'tillage_practice': random.choice(['Conventional', 'Reduced', 'No-till']),
-                'cover_crops': random.choice([True, False]),
-                'crop_rotation': random.choice([True, False]),
-                'sustainability_score': round(random.uniform(55, 95), 1)
-            }
-        )
+        if existing_carbon:
+            # Use existing real carbon data
+            carbon_data = existing_carbon
+        else:
+            # Calculate carbon metrics based on real farm data
+            # Use GHG calculator if available, otherwise estimate from farm area
+            from analytics.ghg_calculator import calculate_farm_emissions
+            
+            farm_area_ha = float(farm.total_area) if farm.total_area else 10.0  # hectares
+            
+            try:
+                emissions_data = calculate_farm_emissions(farm)
+                total_emissions = emissions_data.get('total_emissions', farm_area_ha * 200)
+                carbon_sequestration = emissions_data.get('sequestration', farm_area_ha * 50)
+                fertilizer_emissions = emissions_data.get('fertilizer', farm_area_ha * 40)
+                fuel_emissions = emissions_data.get('fuel', farm_area_ha * 30)
+            except:
+                # Estimate based on typical values per hectare
+                total_emissions = round(farm_area_ha * 200, 0)  # ~200 kg CO2e per hectare
+                carbon_sequestration = round(farm_area_ha * 50, 0)  # ~50 kg CO2e sequestered per ha
+                fertilizer_emissions = round(farm_area_ha * 40, 0)
+                fuel_emissions = round(farm_area_ha * 30, 0)
+            
+            net_carbon = total_emissions - carbon_sequestration
+            
+            # Calculate sustainability score based on real metrics
+            # Higher NDVI = more vegetation = more carbon sequestration
+            from imagery.models import ImageReading
+            avg_farm_ndvi = ImageReading.objects.filter(farm=farm).aggregate(avg=models.Avg('ndvi_mean'))['avg'] or 0.5
+            sustainability_score = round(min(95, max(40, avg_farm_ndvi * 100 + 30)), 1)
+            
+            carbon_data, _ = CarbonFootprint.objects.update_or_create(
+                farm=farm,
+                year=datetime.now().year,
+                season=current_season,
+                defaults={
+                    'total_emissions': total_emissions,
+                    'soil_carbon_sequestration': carbon_sequestration,
+                    'net_carbon': net_carbon,
+                    'fertilizer_emissions': fertilizer_emissions,
+                    'fuel_emissions': fuel_emissions,
+                    'livestock_emissions': 0,  # Set to 0 unless user inputs
+                    'crop_residue_emissions': round(farm_area_ha * 10, 0),
+                    'tillage_practice': 'Conventional',  # Default, user can update
+                    'cover_crops': False,
+                    'crop_rotation': True,
+                    'sustainability_score': sustainability_score
+                }
+            )
         
         carbon_summary = {
-            'total_emissions': f"{total_emissions} kg CO₂e",
-            'carbon_sequestered': f"{carbon_sequestration} kg CO₂e",
-            'net_carbon': f"{net_carbon} kg CO₂e",
+            'total_emissions': f"{carbon_data.total_emissions} kg CO₂e",
+            'carbon_sequestered': f"{carbon_data.soil_carbon_sequestration} kg CO₂e",
+            'net_carbon': f"{carbon_data.net_carbon} kg CO₂e",
             'sustainability_score': carbon_data.sustainability_score,
             'rating': 'Excellent' if carbon_data.sustainability_score >= 80 else 'Good' if carbon_data.sustainability_score >= 60 else 'Needs Improvement'
         }
@@ -849,6 +1020,10 @@ class AnalyticsView(APIView):
             'download_skipped': download_skipped,
             'planetary_computer': planetary_info,
             
+            # NDVI/NDWI visualization images
+            'ndvi_image_url': ndvi_image_url,
+            'ndwi_image_url': ndwi_image_url,
+            
             # FarmVibes Workflow Results
             'results': field_results,
             
@@ -871,6 +1046,7 @@ class AnalyticsView(APIView):
             'time_series': time_series,
             
             'harvest_predictions': harvest_predictions,
+            'yield_predictions': yield_predictions,  # ML-based yield prediction from real NDVI
             'crop_classifications': crop_classifications,
             'weather_forecast': weather_forecast,
             'carbon_footprint': carbon_summary,
@@ -882,6 +1058,7 @@ class AnalyticsView(APIView):
                 'Crop Health Assessment',
                 'Crop Type Classification',
                 'Harvest Date Prediction',
+                'Yield Prediction (ML)',
                 'Weather Forecasting',
                 'Carbon Footprint Analysis',
                 'Irrigation Recommendations',
@@ -891,13 +1068,13 @@ class AnalyticsView(APIView):
 
     def _get_time_series_data(self, farm):
         """Get historical NDVI/NDWI data for time series charts - REAL DATA ONLY"""
-        from analytics.models import AnalyticsResult
+        from imagery.models import ImageReading
         
-        # Get historical data from database
+        # Get historical data from ImageReading table (real satellite data from MinIO)
         fields = FieldBoundary.objects.filter(farm=farm)
-        historical_data = AnalyticsResult.objects.filter(
+        historical_data = ImageReading.objects.filter(
             field__in=fields
-        ).order_by('date').values('date', 'avg_ndvi', 'avg_ndwi', 'field__name')
+        ).order_by('acquisition_date').values('acquisition_date', 'ndvi_mean', 'ndwi_mean', 'field__name')
         
         # Group by date
         time_series = {
@@ -910,12 +1087,14 @@ class AnalyticsView(APIView):
         }
         
         if historical_data.exists():
-            for record in historical_data[:30]:  # Last 30 records
-                date_str = record['date'].strftime('%Y-%m-%d') if record['date'] else ''
-                if date_str and date_str not in time_series['dates']:
+            seen_dates = set()
+            for record in historical_data:
+                date_str = record['acquisition_date'].strftime('%Y-%m-%d') if record['acquisition_date'] else ''
+                if date_str and date_str not in seen_dates:
+                    seen_dates.add(date_str)
                     time_series['dates'].append(date_str)
-                    time_series['ndvi_values'].append(round(record['avg_ndvi'], 4) if record['avg_ndvi'] else 0)
-                    time_series['ndwi_values'].append(round(record['avg_ndwi'], 4) if record['avg_ndwi'] else 0)
+                    time_series['ndvi_values'].append(round(record['ndvi_mean'], 4) if record['ndvi_mean'] else 0)
+                    time_series['ndwi_values'].append(round(record['ndwi_mean'], 4) if record['ndwi_mean'] else 0)
                     time_series['labels'].append(record['field__name'])
             time_series['record_count'] = len(time_series['dates'])
         
@@ -1008,78 +1187,33 @@ class AnalyticsView(APIView):
 
 
 class SatelliteImageListView(APIView):
-    """List available satellite images from local storage and MinIO"""
+    """List available satellite images from MinIO (primary) with local fallback"""
     permission_classes = (AllowAny,)
 
     def get(self, request):
         farm_id = request.query_params.get('farm_id')
         
-        images = []
         minio_images = []
+        local_images = []
+        minio_available = False
         
-        media_root = getattr(settings, 'MEDIA_ROOT', 'media')
-        
-        if farm_id:
-            # Get images for specific farm
-            farms = [{'id': farm_id}]
-        else:
-            # Get images for all farms
-            farms = Farm.objects.values('id', 'name')
-        
-        for farm_info in farms:
-            farm_folder = os.path.join(media_root, 'uploads', 'satellite', str(farm_info['id'] if isinstance(farm_info, dict) else farm_info.id))
-            
-            if os.path.exists(farm_folder):
-                # Check for date-organized subfolders
-                for item in os.listdir(farm_folder):
-                    item_path = os.path.join(farm_folder, item)
-                    
-                    if os.path.isdir(item_path):
-                        # It's a date folder (e.g., 2024-01-15)
-                        for f in os.listdir(item_path):
-                            if f.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
-                                full_path = os.path.join(item_path, f)
-                                farm_id_val = farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']
-                                images.append({
-                                    'farm_id': farm_id_val,
-                                    'farm_name': farm_info.get('name', f"Farm {farm_id_val}") if isinstance(farm_info, dict) else farm_info.get('name', ''),
-                                    'date': item,
-                                    'filename': f,
-                                    'path': f"/media/uploads/satellite/{farm_id_val}/{item}/{f}",
-                                    'preview_url': f"/api/image-preview/?path=uploads/satellite/{farm_id_val}/{item}/{f}",
-                                    'file_size': os.path.getsize(full_path),
-                                    'source': 'local',
-                                    'type': self._get_band_type(f)
-                                })
-                    else:
-                        # Direct file (legacy structure)
-                        if item.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
-                            full_path = os.path.join(farm_folder, item)
-                            farm_id_val = farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']
-                            images.append({
-                                'farm_id': farm_id_val,
-                                'date': datetime.fromtimestamp(os.path.getmtime(full_path)).strftime('%Y-%m-%d'),
-                                'filename': item,
-                                'path': f"/media/uploads/satellite/{farm_id_val}/{item}",
-                                'preview_url': f"/api/image-preview/?path=uploads/satellite/{farm_id_val}/{item}",
-                                'file_size': os.path.getsize(full_path),
-                                'source': 'local',
-                                'type': 'unknown'
-                            })
-        
-        # Try to list MinIO images
+        # Try MinIO first (primary storage)
         try:
             from minio import Minio
             minio_client = Minio(
-                os.getenv('MINIO_ENDPOINT', 'localhost:9000'),
-                access_key=os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
-                secret_key=os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+                getattr(settings, 'MINIO_ENDPOINT', os.getenv('MINIO_ENDPOINT', 'localhost:9000')),
+                access_key=getattr(settings, 'MINIO_ACCESS_KEY', os.getenv('MINIO_ACCESS_KEY', 'minioadmin')),
+                secret_key=getattr(settings, 'MINIO_SECRET_KEY', os.getenv('MINIO_SECRET_KEY', 'minioadmin')),
                 secure=False
             )
             
             bucket = 'satellite-imagery'
             if minio_client.bucket_exists(bucket):
-                objects = minio_client.list_objects(bucket, recursive=True)
+                minio_available = True
+                # Build prefix for farm-specific query
+                prefix = f"farm_{farm_id}/" if farm_id else ""
+                objects = minio_client.list_objects(bucket, prefix=prefix, recursive=True)
+                
                 for obj in objects:
                     # Parse path: farm_1/2024-01-15/red_B04.tif
                     parts = obj.object_name.split('/')
@@ -1099,10 +1233,42 @@ class SatelliteImageListView(APIView):
                             'type': self._get_band_type(filename)
                         })
         except Exception as e:
-            pass  # MinIO not available
+            pass  # MinIO not available, will use local fallback
         
-        # Sort by date descending
-        all_images = images + minio_images
+        # Only check local storage if MinIO not available or empty
+        if not minio_available or len(minio_images) == 0:
+            media_root = getattr(settings, 'MEDIA_ROOT', 'media')
+            
+            if farm_id:
+                farms = [{'id': farm_id}]
+            else:
+                farms = Farm.objects.values('id', 'name')
+            
+            for farm_info in farms:
+                farm_folder = os.path.join(media_root, 'uploads', 'satellite', str(farm_info['id'] if isinstance(farm_info, dict) else farm_info.id))
+                
+                if os.path.exists(farm_folder):
+                    for item in os.listdir(farm_folder):
+                        item_path = os.path.join(farm_folder, item)
+                        
+                        if os.path.isdir(item_path):
+                            for f in os.listdir(item_path):
+                                if f.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
+                                    full_path = os.path.join(item_path, f)
+                                    farm_id_val = farm_info.get('id') if isinstance(farm_info, dict) else farm_info['id']
+                                    local_images.append({
+                                        'farm_id': farm_id_val,
+                                        'date': item,
+                                        'filename': f,
+                                        'path': f"/media/uploads/satellite/{farm_id_val}/{item}/{f}",
+                                        'preview_url': f"/api/image-preview/?source=minio&path=farm_{farm_id_val}/{item}/{f}",
+                                        'file_size': os.path.getsize(full_path),
+                                        'source': 'local',
+                                        'type': self._get_band_type(f)
+                                    })
+        
+        # Combine and sort results
+        all_images = minio_images + local_images
         all_images.sort(key=lambda x: x.get('date', ''), reverse=True)
         
         # Group by farm and date for better display
@@ -1130,7 +1296,7 @@ class SatelliteImageListView(APIView):
         
         return Response({
             'total_images': len(all_images),
-            'local_count': len(images),
+            'local_count': len(local_images),
             'minio_count': len(minio_images),
             'grouped_by_date': list(grouped.values()),
             'all_images': all_images[:50]  # Limit to 50 for display
@@ -1157,7 +1323,7 @@ class SatelliteImageListView(APIView):
 
 
 class ImagePreviewView(APIView):
-    """Generate image previews/thumbnails for satellite imagery"""
+    """Generate image previews/thumbnails for satellite imagery with high-quality heatmap visualization"""
     permission_classes = (AllowAny,)
     
     def get(self, request):
@@ -1166,8 +1332,10 @@ class ImagePreviewView(APIView):
         
         path = request.query_params.get('path', '')
         source = request.query_params.get('source', 'local')
-        width = int(request.query_params.get('width', 200))
-        height = int(request.query_params.get('height', 150))
+        # Higher default resolution for better quality
+        width = int(request.query_params.get('width', 800))
+        height = int(request.query_params.get('height', 600))
+        quality = int(request.query_params.get('quality', 95))  # PNG/JPEG quality
         
         if not path:
             return Response({'error': 'Path required'}, status=400)
@@ -1181,9 +1349,9 @@ class ImagePreviewView(APIView):
                 import tempfile
                 
                 minio_client = Minio(
-                    os.getenv('MINIO_ENDPOINT', 'localhost:9000'),
-                    access_key=os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
-                    secret_key=os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+                    getattr(settings, 'MINIO_ENDPOINT', os.getenv('MINIO_ENDPOINT', 'localhost:9000')),
+                    access_key=getattr(settings, 'MINIO_ACCESS_KEY', os.getenv('MINIO_ACCESS_KEY', 'minioadmin')),
+                    secret_key=getattr(settings, 'MINIO_SECRET_KEY', os.getenv('MINIO_SECRET_KEY', 'minioadmin')),
                     secure=False
                 )
                 
@@ -1203,13 +1371,18 @@ class ImagePreviewView(APIView):
                 with open(full_path, 'rb') as f:
                     image_data = f.read()
             
-            # Process and create thumbnail
+            # Process and create thumbnail with pseudo-color/heatmap visualization
             if path.lower().endswith(('.tif', '.tiff')):
-                # For GeoTIFF, use rasterio to read and convert
+                # For GeoTIFF, use rasterio to read and apply colormap
                 try:
                     import rasterio
                     from PIL import Image
                     import numpy as np
+                    import matplotlib.pyplot as plt
+                    import matplotlib.colors as mcolors
+                    
+                    # Get colormap from query param (default: viridis for general, RdYlGn for vegetation)
+                    colormap_name = request.query_params.get('colormap', 'auto')
                     
                     # Write to temp file for rasterio
                     with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
@@ -1220,33 +1393,76 @@ class ImagePreviewView(APIView):
                         # Read the first band
                         band = src.read(1)
                         
-                        # Normalize to 0-255
+                        # Normalize to 0-1 range
                         band = band.astype(float)
-                        min_val = np.percentile(band[band > 0], 2) if np.any(band > 0) else 0
-                        max_val = np.percentile(band[band > 0], 98) if np.any(band > 0) else 1
+                        
+                        # Handle nodata values
+                        nodata = src.nodata
+                        if nodata is not None:
+                            mask = band == nodata
+                            band[mask] = np.nan
+                        
+                        # Use percentile for better contrast
+                        valid_data = band[~np.isnan(band)]
+                        if len(valid_data) > 0:
+                            min_val = np.percentile(valid_data, 2)
+                            max_val = np.percentile(valid_data, 98)
+                        else:
+                            min_val, max_val = 0, 1
                         
                         if max_val > min_val:
-                            band = np.clip((band - min_val) / (max_val - min_val) * 255, 0, 255)
+                            band_norm = np.clip((band - min_val) / (max_val - min_val), 0, 1)
                         else:
-                            band = np.zeros_like(band)
+                            band_norm = np.zeros_like(band)
                         
-                        band = band.astype(np.uint8)
+                        # Auto-detect best colormap based on band type from filename
+                        if colormap_name == 'auto':
+                            filename_lower = path.lower()
+                            if 'ndvi' in filename_lower or 'nir' in filename_lower:
+                                colormap_name = 'RdYlGn'  # Red-Yellow-Green for vegetation
+                            elif 'ndwi' in filename_lower or 'swir' in filename_lower:
+                                colormap_name = 'Blues'  # Blues for water
+                            elif 'red' in filename_lower:
+                                colormap_name = 'Reds'
+                            elif 'green' in filename_lower:
+                                colormap_name = 'Greens'
+                            elif 'blue' in filename_lower:
+                                colormap_name = 'Blues'
+                            else:
+                                colormap_name = 'viridis'  # Default scientific colormap
                         
-                        # Create PIL image and resize
-                        img = Image.fromarray(band, mode='L')
-                        img.thumbnail((width, height), Image.Resampling.LANCZOS)
+                        # Apply colormap with high quality rendering
+                        cmap = plt.get_cmap(colormap_name)
                         
-                        # Convert to RGB with a nice color map
-                        img_rgb = Image.new('RGB', img.size)
-                        for x in range(img.width):
-                            for y in range(img.height):
-                                v = img.getpixel((x, y))
-                                # Green tint for vegetation
-                                img_rgb.putpixel((x, y), (int(v * 0.3), v, int(v * 0.4)))
+                        # Use matplotlib for high-quality figure rendering
+                        # Calculate figure size to match requested dimensions at high DPI
+                        dpi = 150  # Higher DPI for sharper images
+                        fig_width = width / dpi
+                        fig_height = height / dpi
                         
-                        # Save to bytes
+                        # Create figure with tight layout
+                        fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=dpi)
+                        
+                        # Display with no interpolation for crisp pixels
+                        im = ax.imshow(band_norm, cmap=cmap, interpolation='nearest', aspect='auto')
+                        
+                        # Remove axes for clean image
+                        ax.set_axis_off()
+                        
+                        # Add colorbar if requested
+                        show_colorbar = request.query_params.get('colorbar', 'false').lower() == 'true'
+                        if show_colorbar:
+                            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                            cbar.ax.tick_params(labelsize=8, colors='white')
+                        
+                        # Tight layout to maximize image area
+                        plt.tight_layout(pad=0)
+                        
+                        # Save to bytes with high quality
                         output = io.BytesIO()
-                        img_rgb.save(output, format='PNG')
+                        fig.savefig(output, format='png', dpi=dpi, bbox_inches='tight', 
+                                   pad_inches=0, facecolor='#1a1a2e', edgecolor='none')
+                        plt.close(fig)  # Important: close figure to free memory
                         output.seek(0)
                     
                     # Cleanup temp file
@@ -1255,14 +1471,26 @@ class ImagePreviewView(APIView):
                     return HttpResponse(output.getvalue(), content_type='image/png')
                     
                 except Exception as e:
-                    # Fallback: return a placeholder
-                    return self._placeholder_image(width, height, str(e)[:20])
+                    # Fallback: return a placeholder with friendly message
+                    return self._placeholder_image(width, height, 'No valid imagery')
             else:
-                # For regular images (JPG, PNG)
-                from PIL import Image
+                # For regular images (JPG, PNG) - high quality processing
+                from PIL import Image, ImageEnhance
                 
                 img = Image.open(io.BytesIO(image_data))
-                img.thumbnail((width, height), Image.Resampling.LANCZOS)
+                
+                # Use high-quality resize instead of thumbnail for better quality
+                # Calculate aspect-ratio-preserving dimensions
+                orig_width, orig_height = img.size
+                ratio = min(width / orig_width, height / orig_height)
+                new_size = (int(orig_width * ratio), int(orig_height * ratio))
+                
+                # Use LANCZOS (high quality) resampling
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                
+                # Slight sharpening for cleaner output
+                enhancer = ImageEnhance.Sharpness(img)
+                img = enhancer.enhance(1.1)
                 
                 output = io.BytesIO()
                 img.save(output, format='PNG')
@@ -1274,24 +1502,142 @@ class ImagePreviewView(APIView):
             return self._placeholder_image(width, height, 'Error')
     
     def _placeholder_image(self, width, height, text='No Preview'):
-        """Generate a placeholder image"""
+        """Generate a high-quality placeholder image with modern styling"""
         from django.http import HttpResponse
-        from PIL import Image, ImageDraw
+        from PIL import Image, ImageDraw, ImageFont
         import io
         
-        img = Image.new('RGB', (width, height), color=(240, 240, 240))
+        # Dark modern background matching the UI theme
+        img = Image.new('RGB', (width, height), color=(26, 26, 46))  # #1a1a2e
+        draw = ImageDraw.Draw(img)
+        
+        # Draw subtle grid pattern for visual interest
+        grid_color = (40, 40, 70)
+        grid_spacing = 30
+        for x in range(0, width, grid_spacing):
+            draw.line([(x, 0), (x, height)], fill=grid_color, width=1)
+        for y in range(0, height, grid_spacing):
+            draw.line([(0, y), (width, y)], fill=grid_color, width=1)
+        
+        # Draw border
+        draw.rectangle([(0, 0), (width-1, height-1)], outline=(60, 60, 90), width=2)
+        
+        # Try to use a larger font
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size=min(width, height) // 12)
+        except:
+            font = ImageFont.load_default()
+        
+        # Draw icon-like shape (satellite/image icon)
+        center_x, center_y = width // 2, height // 2 - 20
+        icon_size = min(width, height) // 6
+        draw.rectangle(
+            [(center_x - icon_size, center_y - icon_size), 
+             (center_x + icon_size, center_y + icon_size)], 
+            outline=(100, 100, 140), width=3
+        )
+        # Mountain shape inside
+        draw.polygon([
+            (center_x - icon_size + 10, center_y + icon_size - 10),
+            (center_x - icon_size // 2, center_y),
+            (center_x, center_y + icon_size - 10)
+        ], fill=(70, 70, 100))
+        draw.polygon([
+            (center_x - 10, center_y + icon_size - 10),
+            (center_x + icon_size // 3, center_y - icon_size // 2),
+            (center_x + icon_size - 10, center_y + icon_size - 10)
+        ], fill=(90, 90, 120))
+        # Sun circle
+        draw.ellipse(
+            [(center_x + icon_size // 2, center_y - icon_size + 15),
+             (center_x + icon_size - 10, center_y - icon_size // 2 + 15)],
+            fill=(120, 120, 160)
+        )
+        
+        # Draw text below icon
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_x = (width - text_width) // 2
+        text_y = center_y + icon_size + 20
+        draw.text((text_x, text_y), text, fill=(150, 150, 180), font=font)
+        
+        output = io.BytesIO()
+        img.save(output, format='PNG', quality=95)
+        output.seek(0)
+        
+        return HttpResponse(output.getvalue(), content_type='image/png')
+
+
+class AnalysisImageView(APIView):
+    """Serve NDVI/NDWI analysis result images from MinIO"""
+    permission_classes = (AllowAny,)
+    
+    def get(self, request):
+        from django.http import HttpResponse
+        
+        path = request.query_params.get('path', '')
+        
+        if not path:
+            return Response({'error': 'Path required'}, status=400)
+        
+        try:
+            from minio import Minio
+            
+            minio_client = Minio(
+                os.getenv('MINIO_ENDPOINT', 'localhost:9000'),
+                access_key=os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
+                secret_key=os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+                secure=False
+            )
+            
+            bucket_name = 'analysis-results'
+            
+            # Get the image from MinIO
+            response = minio_client.get_object(bucket_name, path)
+            image_data = response.read()
+            response.close()
+            response.release_conn()
+            
+            # Determine content type
+            content_type = 'image/png'
+            if path.lower().endswith('.jpg') or path.lower().endswith('.jpeg'):
+                content_type = 'image/jpeg'
+            
+            return HttpResponse(image_data, content_type=content_type)
+            
+        except Exception as e:
+            # Return a placeholder if image not found
+            return self._generate_placeholder(str(e))
+    
+    def _generate_placeholder(self, error_msg='Image not found'):
+        """Generate a placeholder image for missing analysis results"""
+        from django.http import HttpResponse
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+        
+        width, height = 400, 300
+        img = Image.new('RGB', (width, height), color=(26, 26, 46))
         draw = ImageDraw.Draw(img)
         
         # Draw border
-        draw.rectangle([(0, 0), (width-1, height-1)], outline=(200, 200, 200))
+        draw.rectangle([(0, 0), (width-1, height-1)], outline=(60, 60, 90), width=2)
         
         # Draw text
-        text_bbox = draw.textbbox((0, 0), text)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size=16)
+        except:
+            font = ImageFont.load_default()
+        
+        text = "Analysis image not available"
+        text_bbox = draw.textbbox((0, 0), text, font=font)
         text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
         x = (width - text_width) // 2
-        y = (height - text_height) // 2
-        draw.text((x, y), text, fill=(150, 150, 150))
+        draw.text((x, height // 2 - 20), text, fill=(150, 150, 180), font=font)
+        
+        small_text = "Run analysis to generate"
+        small_bbox = draw.textbbox((0, 0), small_text, font=font)
+        small_width = small_bbox[2] - small_bbox[0]
+        draw.text(((width - small_width) // 2, height // 2 + 10), small_text, fill=(100, 100, 130), font=font)
         
         output = io.BytesIO()
         img.save(output, format='PNG')

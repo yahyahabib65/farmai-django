@@ -1,0 +1,603 @@
+{% load i18n l10n %}
+<style>
+    .field-map-container {
+        position: relative;
+        margin-bottom: 10px;
+    }
+    
+    .field-boundary-map {
+        height: 500px;
+        width: 100%;
+        border: 2px solid #ccc;
+        border-radius: 8px;
+    }
+    
+    .map-layer-control {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1000;
+        background: white;
+        padding: 10px;
+        border-radius: 6px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+    
+    .map-layer-control label {
+        display: block;
+        margin: 5px 0;
+        cursor: pointer;
+        font-size: 13px;
+    }
+    
+    .map-layer-control input[type="radio"] {
+        margin-right: 8px;
+    }
+    
+    .map-search-box {
+        position: absolute;
+        top: 10px;
+        left: 50px;
+        z-index: 1000;
+        width: 250px;
+    }
+    
+    .map-search-box input {
+        width: 100%;
+        padding: 8px 12px;
+        border: 2px solid #ccc;
+        border-radius: 6px;
+        font-size: 14px;
+    }
+    
+    .map-search-box input:focus {
+        border-color: #417690;
+        outline: none;
+    }
+    
+    .map-instructions {
+        background: #e8f4f8;
+        padding: 12px 15px;
+        border-radius: 6px;
+        margin-bottom: 10px;
+        font-size: 13px;
+        color: #333;
+        border-left: 4px solid #417690;
+    }
+    
+    .map-instructions strong {
+        color: #417690;
+    }
+    
+    .map-info-panel {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        z-index: 1000;
+        background: white;
+        padding: 10px 15px;
+        border-radius: 6px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        max-width: 300px;
+    }
+    
+    .map-info-panel h5 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        color: #417690;
+    }
+    
+    .map-info-panel .info-row {
+        display: flex;
+        justify-content: space-between;
+        margin: 4px 0;
+        font-size: 12px;
+    }
+    
+    .map-info-panel .info-label {
+        color: #666;
+    }
+    
+    .map-info-panel .info-value {
+        font-weight: bold;
+    }
+    
+    .map-info-panel .status-ok {
+        color: #28a745;
+    }
+    
+    .map-info-panel .status-warning {
+        color: #ffc107;
+    }
+    
+    .map-info-panel .status-error {
+        color: #dc3545;
+    }
+    
+    .validation-message {
+        margin-top: 10px;
+        padding: 10px 15px;
+        border-radius: 6px;
+        font-size: 13px;
+    }
+    
+    .validation-message.success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    
+    .validation-message.warning {
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeeba;
+    }
+    
+    .validation-message.error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    
+    .leaflet-draw-toolbar a {
+        background-color: white;
+    }
+</style>
+
+<div class="map-instructions">
+    <strong>📍 Draw Field Boundary:</strong>
+    <ul style="margin: 5px 0 0 20px; padding: 0;">
+        <li>First, select a <strong>Farm</strong> from the dropdown above to see its location</li>
+        <li>Use the <strong>polygon tool</strong> (pentagon icon) on the left to draw the field boundary</li>
+        <li>The <strong>orange circle</strong> shows the maximum allowed distance ({{ max_distance_km }} km) from the farm</li>
+        <li>Switch between <strong>Satellite/Streets/Terrain</strong> views using the layer control (top-right)</li>
+    </ul>
+</div>
+
+<div class="field-map-container">
+    <div id="{{ id }}_map" class="field-boundary-map"></div>
+    
+    <div class="map-search-box">
+        <input type="text" id="{{ id }}_search" placeholder="🔍 Search location...">
+    </div>
+    
+    <div class="map-layer-control">
+        <strong>🗺️ Map Layers</strong>
+        <hr style="margin: 5px 0; border: 0; border-top: 1px solid #ddd;">
+        <small style="color: #888;">Google Maps</small>
+        <label><input type="radio" name="{{ id }}_layer" value="google_satellite" checked> 🛰️ Google Satellite</label>
+        <label><input type="radio" name="{{ id }}_layer" value="google_streets"> 🛣️ Google Streets</label>
+        <label><input type="radio" name="{{ id }}_layer" value="google_hybrid"> 🌍 Google Hybrid</label>
+        <label><input type="radio" name="{{ id }}_layer" value="google_terrain"> ⛰️ Google Terrain</label>
+        <hr style="margin: 5px 0; border: 0; border-top: 1px solid #ddd;">
+        <small style="color: #888;">Other Sources</small>
+        <label><input type="radio" name="{{ id }}_layer" value="esri_satellite"> 🛰️ ESRI Satellite</label>
+        <label><input type="radio" name="{{ id }}_layer" value="osm_streets"> 🗺️ OpenStreetMap</label>
+        <label><input type="radio" name="{{ id }}_layer" value="topo"> 🏔️ Topographic</label>
+    </div>
+    
+    <div class="map-info-panel" id="{{ id }}_info">
+        <h5>📊 Field Info</h5>
+        <div class="info-row">
+            <span class="info-label">Farm:</span>
+            <span class="info-value" id="{{ id }}_farm_name">Not selected</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Area:</span>
+            <span class="info-value" id="{{ id }}_area">--</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Distance:</span>
+            <span class="info-value" id="{{ id }}_distance">--</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Status:</span>
+            <span class="info-value" id="{{ id }}_status">Draw boundary</span>
+        </div>
+    </div>
+</div>
+
+<div id="{{ id }}_validation" class="validation-message" style="display: none;"></div>
+
+<textarea id="{{ id }}" name="{{ name }}" style="display: none;">{{ value }}</textarea>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Default center from Django settings (no hardcoded fallbacks)
+    var defaultLat = {{ default_lat|unlocalize }};
+    var defaultLon = {{ default_lon|unlocalize }};
+    var defaultZoom = {{ default_zoom }};
+    var maxDistanceKm = {{ max_distance_km|unlocalize }};
+    
+    // Initialize map
+    var map = L.map('{{ id }}_map').setView([defaultLat, defaultLon], defaultZoom);
+    
+    // Define tile layers - Google Maps style + other sources
+    var layers = {
+        // Google Maps Layers
+        google_satellite: L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+            attribution: '© Google Maps',
+            maxZoom: 21,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        }),
+        google_streets: L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+            attribution: '© Google Maps',
+            maxZoom: 21,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        }),
+        google_hybrid: L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+            attribution: '© Google Maps',
+            maxZoom: 21,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        }),
+        google_terrain: L.tileLayer('https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', {
+            attribution: '© Google Maps',
+            maxZoom: 21,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        }),
+        // Other Sources
+        esri_satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '© ESRI',
+            maxZoom: 19
+        }),
+        osm_streets: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }),
+        topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenTopoMap',
+            maxZoom: 17
+        })
+    };
+    
+    // Add default layer (Google Satellite)
+    layers.google_satellite.addTo(map);
+    
+    // Layer switcher
+    var layerRadios = document.querySelectorAll('input[name="{{ id }}_layer"]');
+    layerRadios.forEach(function(radio) {
+        radio.addEventListener('change', function() {
+            Object.values(layers).forEach(function(layer) {
+                map.removeLayer(layer);
+            });
+            layers[this.value].addTo(map);
+        });
+    });
+    
+    // Feature group for drawn items
+    var drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+    
+    // Draw controls
+    var drawControl = new L.Control.Draw({
+        draw: {
+            polygon: {
+                allowIntersection: false,
+                showArea: true,
+                shapeOptions: {
+                    color: '#2e7d32',
+                    fillColor: '#4caf50',
+                    fillOpacity: 0.4,
+                    weight: 3
+                }
+            },
+            rectangle: {
+                shapeOptions: {
+                    color: '#2e7d32',
+                    fillColor: '#4caf50',
+                    fillOpacity: 0.4,
+                    weight: 3
+                }
+            },
+            polyline: false,
+            circle: false,
+            circlemarker: false,
+            marker: false
+        },
+        edit: {
+            featureGroup: drawnItems,
+            remove: true
+        }
+    });
+    map.addControl(drawControl);
+    
+    // Farm marker and boundary circle
+    var farmMarker = null;
+    var farmBoundaryCircle = null;
+    var currentFarmLocation = null;
+    
+    // Parse existing boundary if any
+    var existingValue = document.getElementById('{{ id }}').value;
+    if (existingValue && existingValue.includes('POLYGON')) {
+        try {
+            // Parse WKT POLYGON format
+            var match = existingValue.match(/POLYGON\s*\(\(([^)]+)\)\)/i);
+            if (match) {
+                var coordsStr = match[1];
+                var coords = coordsStr.split(',').map(function(pair) {
+                    var parts = pair.trim().split(/\s+/);
+                    return [parseFloat(parts[1]), parseFloat(parts[0])]; // [lat, lon]
+                });
+                
+                var polygon = L.polygon(coords, {
+                    color: '#2e7d32',
+                    fillColor: '#4caf50',
+                    fillOpacity: 0.4,
+                    weight: 3
+                });
+                drawnItems.addLayer(polygon);
+                map.fitBounds(polygon.getBounds(), { padding: [50, 50] });
+                
+                updateFieldInfo(polygon);
+            }
+        } catch (e) {
+            console.error('Error parsing existing boundary:', e);
+        }
+    }
+    
+    // Watch for farm selection changes
+    var farmSelect = document.getElementById('id_farm');
+    if (farmSelect) {
+        farmSelect.addEventListener('change', updateFarmLocation);
+        // Initial load
+        updateFarmLocation();
+    }
+    
+    function updateFarmLocation() {
+        var farmId = farmSelect ? farmSelect.value : null;
+        
+        if (!farmId) {
+            clearFarmMarker();
+            return;
+        }
+        
+        // Fetch farm location via API
+        fetch('/api/farms/' + farmId + '/')
+            .then(function(response) { return response.json(); })
+            .then(function(farm) {
+                if (farm && farm.location && farm.location.coordinates) {
+                    var lon = farm.location.coordinates[0];
+                    var lat = farm.location.coordinates[1];
+                    
+                    currentFarmLocation = { lat: lat, lon: lon };
+                    
+                    // Update farm name display
+                    document.getElementById('{{ id }}_farm_name').textContent = farm.name || 'Farm ' + farmId;
+                    
+                    // Remove existing markers
+                    clearFarmMarker();
+                    
+                    // Add farm marker
+                    farmMarker = L.marker([lat, lon], {
+                        icon: L.divIcon({
+                            className: 'farm-marker',
+                            html: '<div style="background: #dc3545; color: white; padding: 5px 10px; border-radius: 4px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">🏠 ' + (farm.name || 'Farm') + '</div>',
+                            iconSize: null,
+                            iconAnchor: [50, 40]
+                        })
+                    }).addTo(map);
+                    
+                    // Add max distance circle
+                    farmBoundaryCircle = L.circle([lat, lon], {
+                        radius: maxDistanceKm * 1000,
+                        color: '#ff9800',
+                        fillColor: '#fff3e0',
+                        fillOpacity: 0.1,
+                        weight: 2,
+                        dashArray: '10, 5'
+                    }).addTo(map);
+                    
+                    // Center map on farm if no boundary drawn yet
+                    if (drawnItems.getLayers().length === 0) {
+                        map.setView([lat, lon], 14);
+                    }
+                    
+                    // Re-validate existing boundary
+                    validateBoundary();
+                }
+            })
+            .catch(function(err) {
+                console.error('Error fetching farm:', err);
+            });
+    }
+    
+    function clearFarmMarker() {
+        if (farmMarker) {
+            map.removeLayer(farmMarker);
+            farmMarker = null;
+        }
+        if (farmBoundaryCircle) {
+            map.removeLayer(farmBoundaryCircle);
+            farmBoundaryCircle = null;
+        }
+        currentFarmLocation = null;
+    }
+    
+    // Handle draw events
+    map.on(L.Draw.Event.CREATED, function(e) {
+        drawnItems.clearLayers();
+        drawnItems.addLayer(e.layer);
+        
+        updateWKT(e.layer);
+        updateFieldInfo(e.layer);
+        validateBoundary();
+    });
+    
+    map.on(L.Draw.Event.EDITED, function(e) {
+        e.layers.eachLayer(function(layer) {
+            updateWKT(layer);
+            updateFieldInfo(layer);
+            validateBoundary();
+        });
+    });
+    
+    map.on(L.Draw.Event.DELETED, function(e) {
+        document.getElementById('{{ id }}').value = '';
+        resetFieldInfo();
+    });
+    
+    function updateWKT(layer) {
+        var coords = layer.getLatLngs()[0];
+        var wktCoords = coords.map(function(c) {
+            return c.lng + ' ' + c.lat;
+        });
+        // Close the polygon
+        wktCoords.push(coords[0].lng + ' ' + coords[0].lat);
+        
+        var wkt = 'SRID=4326;POLYGON((' + wktCoords.join(', ') + '))';
+        document.getElementById('{{ id }}').value = wkt;
+    }
+    
+    function updateFieldInfo(layer) {
+        // Calculate area
+        var coords = layer.getLatLngs()[0];
+        var area = L.GeometryUtil.geodesicArea(coords);
+        var areaHa = (area / 10000).toFixed(2);
+        
+        document.getElementById('{{ id }}_area').textContent = areaHa + ' ha';
+        
+        // Calculate distance from farm if available
+        if (currentFarmLocation) {
+            var bounds = layer.getBounds();
+            var center = bounds.getCenter();
+            var farmLatLng = L.latLng(currentFarmLocation.lat, currentFarmLocation.lon);
+            var distance = farmLatLng.distanceTo(center);
+            var distanceKm = (distance / 1000).toFixed(2);
+            
+            var distanceEl = document.getElementById('{{ id }}_distance');
+            distanceEl.textContent = distanceKm + ' km';
+            
+            if (distance > maxDistanceKm * 1000) {
+                distanceEl.className = 'info-value status-error';
+            } else if (distance > maxDistanceKm * 0.8 * 1000) {
+                distanceEl.className = 'info-value status-warning';
+            } else {
+                distanceEl.className = 'info-value status-ok';
+            }
+        }
+    }
+    
+    function resetFieldInfo() {
+        document.getElementById('{{ id }}_area').textContent = '--';
+        document.getElementById('{{ id }}_distance').textContent = '--';
+        document.getElementById('{{ id }}_status').textContent = 'Draw boundary';
+        document.getElementById('{{ id }}_status').className = 'info-value';
+        
+        var validation = document.getElementById('{{ id }}_validation');
+        validation.style.display = 'none';
+    }
+    
+    function validateBoundary() {
+        var layers = drawnItems.getLayers();
+        var validation = document.getElementById('{{ id }}_validation');
+        var statusEl = document.getElementById('{{ id }}_status');
+        
+        if (layers.length === 0) {
+            statusEl.textContent = 'Draw boundary';
+            statusEl.className = 'info-value';
+            validation.style.display = 'none';
+            return;
+        }
+        
+        var layer = layers[0];
+        var coords = layer.getLatLngs()[0];
+        var area = L.GeometryUtil.geodesicArea(coords);
+        var areaHa = area / 10000;
+        
+        // Check area constraints
+        if (areaHa < 0.0001) {
+            statusEl.textContent = 'Too small!';
+            statusEl.className = 'info-value status-error';
+            validation.className = 'validation-message error';
+            validation.innerHTML = '<strong>❌ Error:</strong> Field area is too small. Please draw a larger boundary.';
+            validation.style.display = 'block';
+            return;
+        }
+        
+        if (areaHa > 10000) {
+            statusEl.textContent = 'Too large!';
+            statusEl.className = 'info-value status-error';
+            validation.className = 'validation-message error';
+            validation.innerHTML = '<strong>❌ Error:</strong> Field area exceeds maximum of 10,000 ha.';
+            validation.style.display = 'block';
+            return;
+        }
+        
+        // Check distance from farm
+        if (currentFarmLocation) {
+            var bounds = layer.getBounds();
+            var center = bounds.getCenter();
+            var farmLatLng = L.latLng(currentFarmLocation.lat, currentFarmLocation.lon);
+            var distance = farmLatLng.distanceTo(center);
+            
+            if (distance > maxDistanceKm * 1000) {
+                statusEl.textContent = 'Too far!';
+                statusEl.className = 'info-value status-error';
+                validation.className = 'validation-message error';
+                validation.innerHTML = '<strong>❌ Error:</strong> Field is ' + (distance/1000).toFixed(2) + ' km from farm. Maximum allowed is ' + maxDistanceKm + ' km.';
+                validation.style.display = 'block';
+                return;
+            }
+            
+            if (distance > maxDistanceKm * 0.8 * 1000) {
+                statusEl.textContent = 'Warning';
+                statusEl.className = 'info-value status-warning';
+                validation.className = 'validation-message warning';
+                validation.innerHTML = '<strong>⚠️ Warning:</strong> Field is ' + (distance/1000).toFixed(2) + ' km from farm, approaching the ' + maxDistanceKm + ' km limit.';
+                validation.style.display = 'block';
+                return;
+            }
+        } else {
+            // No farm selected
+            statusEl.textContent = 'Select farm';
+            statusEl.className = 'info-value status-warning';
+            validation.className = 'validation-message warning';
+            validation.innerHTML = '<strong>⚠️ Warning:</strong> Please select a farm to validate distance.';
+            validation.style.display = 'block';
+            return;
+        }
+        
+        // All good!
+        statusEl.textContent = 'Valid ✓';
+        statusEl.className = 'info-value status-ok';
+        validation.className = 'validation-message success';
+        validation.innerHTML = '<strong>✅ Valid:</strong> Field boundary is within the allowed distance from the farm.';
+        validation.style.display = 'block';
+    }
+    
+    // Search functionality
+    var searchInput = document.getElementById('{{ id }}_search');
+    var searchTimeout = null;
+    
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            performSearch(this.value);
+        }
+    });
+    
+    function performSearch(query) {
+        if (!query) return;
+        
+        fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(query) + '&limit=1')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data && data.length > 0) {
+                    var result = data[0];
+                    var lat = parseFloat(result.lat);
+                    var lon = parseFloat(result.lon);
+                    map.setView([lat, lon], 15);
+                    searchInput.value = result.display_name.split(',').slice(0, 3).join(', ');
+                }
+            })
+            .catch(function(err) {
+                console.error('Search error:', err);
+            });
+    }
+    
+    // Handle window resize
+    setTimeout(function() {
+        map.invalidateSize();
+    }, 100);
+});
+</script>

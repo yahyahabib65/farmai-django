@@ -323,3 +323,341 @@ def get_health_status(ndvi_value):
         return 'Moderate', 'yellow'
     else:
         return 'Needs Attention', 'red'
+
+
+def generate_ndvi_image(folder_path: str, output_path: str, farm_id: int, image_date: str) -> dict:
+    """
+    Generate NDVI visualization image from separate band files.
+    Creates a colorized heatmap PNG and stores directly in MinIO.
+    
+    Args:
+        folder_path: Path to folder containing band files (NIR, RED)
+        output_path: Base path (used for MinIO bucket path structure)
+        farm_id: Farm ID for naming
+        image_date: Image date string (YYYY-MM-DD)
+    
+    Returns:
+        Dict with MinIO URLs to generated images
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    import io
+    
+    results = {
+        'success': False,
+        'ndvi_image_path': None,
+        'ndwi_image_path': None,
+        'ndvi_image_url': None,
+        'ndwi_image_url': None,
+        'ndvi_mean': None,
+        'ndwi_mean': None,
+        'error': None
+    }
+    
+    # Find band files
+    nir_file = None
+    red_file = None
+    green_file = None
+    
+    for f in os.listdir(folder_path):
+        f_lower = f.lower()
+        if 'nir' in f_lower or 'b08' in f_lower:
+            nir_file = os.path.join(folder_path, f)
+        elif 'red' in f_lower or 'b04' in f_lower:
+            red_file = os.path.join(folder_path, f)
+        elif 'green' in f_lower or 'b03' in f_lower:
+            green_file = os.path.join(folder_path, f)
+    
+    if not nir_file or not red_file:
+        results['error'] = 'Required NIR and RED bands not found'
+        return results
+    
+    try:
+        if not HAS_RASTERIO:
+            results['error'] = 'rasterio not available'
+            return results
+        
+        import rasterio
+        
+        # Initialize MinIO client
+        try:
+            from minio import Minio
+            minio_client = Minio(
+                os.getenv('MINIO_ENDPOINT', 'localhost:9000'),
+                access_key=os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
+                secret_key=os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+                secure=False
+            )
+            bucket_name = 'analysis-results'
+            # Ensure bucket exists
+            if not minio_client.bucket_exists(bucket_name):
+                minio_client.make_bucket(bucket_name)
+        except Exception as e:
+            results['error'] = f'MinIO connection failed: {e}'
+            return results
+        
+        # Read bands
+        with rasterio.open(nir_file) as nir_src:
+            nir_band = nir_src.read(1).astype(float)
+        
+        with rasterio.open(red_file) as red_src:
+            red_band = red_src.read(1).astype(float)
+        
+        # Calculate NDVI
+        ndvi = calculate_ndvi_from_bands(nir_band, red_band)
+        
+        # Generate NDVI image with RdYlGn colormap (red-yellow-green)
+        fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
+        cmap = plt.cm.RdYlGn
+        
+        # Normalize NDVI to 0-1 for colormap (NDVI ranges from -1 to 1)
+        ndvi_norm = (ndvi + 1) / 2  # Map -1,1 to 0,1
+        
+        im = ax.imshow(ndvi_norm, cmap=cmap, vmin=0, vmax=1, interpolation='nearest', aspect='auto')
+        ax.set_axis_off()
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, orientation='vertical')
+        cbar.set_label('NDVI', fontsize=12, fontweight='bold')
+        cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+        cbar.set_ticklabels(['-1.0', '-0.5', '0.0', '0.5', '1.0'])
+        
+        ax.set_title(f'NDVI - Farm {farm_id} - {image_date}', fontsize=14, fontweight='bold', pad=10)
+        plt.tight_layout()
+        
+        # Save to bytes buffer and upload to MinIO
+        ndvi_buffer = io.BytesIO()
+        fig.savefig(ndvi_buffer, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        ndvi_buffer.seek(0)
+        
+        ndvi_object_name = f"ndvi/farm_{farm_id}_{image_date}_ndvi.png"
+        minio_client.put_object(
+            bucket_name,
+            ndvi_object_name,
+            ndvi_buffer,
+            length=ndvi_buffer.getbuffer().nbytes,
+            content_type='image/png'
+        )
+        
+        results['ndvi_image_path'] = f"{bucket_name}/{ndvi_object_name}"
+        results['ndvi_image_url'] = f"/api/analysis-image/?path={ndvi_object_name}"
+        results['ndvi_mean'] = round(float(np.nanmean(ndvi)), 4)
+        
+        # Generate NDWI image if green band exists
+        if green_file:
+            with rasterio.open(green_file) as green_src:
+                green_band = green_src.read(1).astype(float)
+            
+            ndwi = calculate_ndwi_from_bands(green_band, nir_band)
+            
+            fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
+            cmap = plt.cm.Blues_r  # Reversed so high water = blue
+            ndwi_norm = (ndwi + 1) / 2
+            
+            im = ax.imshow(ndwi_norm, cmap=cmap, vmin=0, vmax=1, interpolation='nearest', aspect='auto')
+            ax.set_axis_off()
+            
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, orientation='vertical')
+            cbar.set_label('NDWI', fontsize=12, fontweight='bold')
+            cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+            cbar.set_ticklabels(['-1.0', '-0.5', '0.0', '0.5', '1.0'])
+            
+            ax.set_title(f'NDWI - Farm {farm_id} - {image_date}', fontsize=14, fontweight='bold', pad=10)
+            plt.tight_layout()
+            
+            # Save to bytes buffer and upload to MinIO
+            ndwi_buffer = io.BytesIO()
+            fig.savefig(ndwi_buffer, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            ndwi_buffer.seek(0)
+            
+            ndwi_object_name = f"ndwi/farm_{farm_id}_{image_date}_ndwi.png"
+            minio_client.put_object(
+                bucket_name,
+                ndwi_object_name,
+                ndwi_buffer,
+                length=ndwi_buffer.getbuffer().nbytes,
+                content_type='image/png'
+            )
+            
+            results['ndwi_image_path'] = f"{bucket_name}/{ndwi_object_name}"
+            results['ndwi_image_url'] = f"/api/analysis-image/?path={ndwi_object_name}"
+            results['ndwi_mean'] = round(float(np.nanmean(ndwi)), 4)
+        
+        results['success'] = True
+        
+    except Exception as e:
+        results['error'] = str(e)
+    
+    return results
+
+
+def generate_ndvi_from_minio(farm_id: int, image_date: str, output_path: str) -> dict:
+    """
+    Generate NDVI/NDWI visualization images from MinIO-stored bands.
+    
+    Args:
+        farm_id: Farm ID
+        image_date: Image date (YYYY-MM-DD)
+        output_path: Base media path for output
+    
+    Returns:
+        Dict with paths to generated images
+    """
+    import matplotlib.pyplot as plt
+    import tempfile
+    
+    try:
+        from minio import Minio
+    except ImportError:
+        return {'success': False, 'error': 'minio package not installed'}
+    
+    results = {
+        'success': False,
+        'ndvi_image_path': None,
+        'ndwi_image_path': None,
+        'ndvi_image_url': None,
+        'ndwi_image_url': None,
+        'error': None
+    }
+    
+    try:
+        minio_client = Minio(
+            os.getenv('MINIO_ENDPOINT', 'localhost:9000'),
+            access_key=os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
+            secret_key=os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+            secure=False
+        )
+        
+        bucket = 'satellite-imagery'
+        prefix = f"farm_{farm_id}/{image_date}/"
+        
+        # List and download required bands
+        objects = list(minio_client.list_objects(bucket, prefix=prefix))
+        
+        nir_data = None
+        red_data = None
+        green_data = None
+        
+        for obj in objects:
+            obj_name = obj.object_name.lower()
+            if 'nir' in obj_name or 'b08' in obj_name:
+                response = minio_client.get_object(bucket, obj.object_name)
+                nir_data = response.read()
+                response.close()
+                response.release_conn()
+            elif 'red' in obj_name or 'b04' in obj_name:
+                response = minio_client.get_object(bucket, obj.object_name)
+                red_data = response.read()
+                response.close()
+                response.release_conn()
+            elif 'green' in obj_name or 'b03' in obj_name:
+                response = minio_client.get_object(bucket, obj.object_name)
+                green_data = response.read()
+                response.close()
+                response.release_conn()
+        
+        if not nir_data or not red_data:
+            results['error'] = 'Required NIR and RED bands not found in MinIO'
+            return results
+        
+        # Write to temp files and process
+        import rasterio
+        
+        with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as nir_tmp:
+            nir_tmp.write(nir_data)
+            nir_path = nir_tmp.name
+        
+        with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as red_tmp:
+            red_tmp.write(red_data)
+            red_path = red_tmp.name
+        
+        green_path = None
+        if green_data:
+            with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as green_tmp:
+                green_tmp.write(green_data)
+                green_path = green_tmp.name
+        
+        # Read bands
+        with rasterio.open(nir_path) as nir_src:
+            nir_band = nir_src.read(1).astype(float)
+        
+        with rasterio.open(red_path) as red_src:
+            red_band = red_src.read(1).astype(float)
+        
+        # Calculate NDVI
+        ndvi = calculate_ndvi_from_bands(nir_band, red_band)
+        
+        # Create output directories
+        ndvi_output_dir = os.path.join(output_path, 'results', 'ndvi')
+        ndwi_output_dir = os.path.join(output_path, 'results', 'ndwi')
+        os.makedirs(ndvi_output_dir, exist_ok=True)
+        os.makedirs(ndwi_output_dir, exist_ok=True)
+        
+        # Generate NDVI image
+        fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
+        cmap = plt.cm.RdYlGn
+        ndvi_norm = (ndvi + 1) / 2
+        
+        im = ax.imshow(ndvi_norm, cmap=cmap, vmin=0, vmax=1, interpolation='nearest', aspect='auto')
+        ax.set_axis_off()
+        
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('NDVI', fontsize=12, fontweight='bold')
+        cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+        cbar.set_ticklabels(['-1.0', '-0.5', '0.0', '0.5', '1.0'])
+        
+        ax.set_title(f'NDVI - Farm {farm_id} - {image_date}', fontsize=14, fontweight='bold', pad=10)
+        plt.tight_layout()
+        
+        ndvi_filename = f"farm_{farm_id}_{image_date}_ndvi.png"
+        ndvi_full_path = os.path.join(ndvi_output_dir, ndvi_filename)
+        fig.savefig(ndvi_full_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        
+        results['ndvi_image_path'] = ndvi_full_path
+        results['ndvi_image_url'] = f"/media/results/ndvi/{ndvi_filename}"
+        
+        # Generate NDWI image if green available
+        if green_path:
+            with rasterio.open(green_path) as green_src:
+                green_band = green_src.read(1).astype(float)
+            
+            ndwi = calculate_ndwi_from_bands(green_band, nir_band)
+            
+            fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
+            cmap = plt.cm.Blues_r
+            ndwi_norm = (ndwi + 1) / 2
+            
+            im = ax.imshow(ndwi_norm, cmap=cmap, vmin=0, vmax=1, interpolation='nearest', aspect='auto')
+            ax.set_axis_off()
+            
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('NDWI', fontsize=12, fontweight='bold')
+            cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+            cbar.set_ticklabels(['-1.0', '-0.5', '0.0', '0.5', '1.0'])
+            
+            ax.set_title(f'NDWI - Farm {farm_id} - {image_date}', fontsize=14, fontweight='bold', pad=10)
+            plt.tight_layout()
+            
+            ndwi_filename = f"farm_{farm_id}_{image_date}_ndwi.png"
+            ndwi_full_path = os.path.join(ndwi_output_dir, ndwi_filename)
+            fig.savefig(ndwi_full_path, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            
+            results['ndwi_image_path'] = ndwi_full_path
+            results['ndwi_image_url'] = f"/media/results/ndwi/{ndwi_filename}"
+            
+            os.unlink(green_path)
+        
+        # Cleanup temp files
+        os.unlink(nir_path)
+        os.unlink(red_path)
+        
+        results['success'] = True
+        
+    except Exception as e:
+        results['error'] = str(e)
+    
+    return results

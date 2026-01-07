@@ -17,7 +17,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from imagery.views import DroneImageViewSet, DroneImageUploadView, AnalyticsView, SentinelImageUploadView, SatelliteImageListView, ImagePreviewView
+from imagery.views import DroneImageViewSet, DroneImageUploadView, AnalyticsView, SentinelImageUploadView, SatelliteImageListView, ImagePreviewView, AnalysisImageView
 from core.views import FarmViewSet, FieldBoundaryViewSet, DeviceViewSet, AssetViewSet, ManualImportView, farm_data_view, farm_filter_view
 from iot.views import SensorReadingViewSet, ThingsBoardSyncView, ThingsBoardHistoricalSyncView, FarmSensorSummaryView, SensorTimeSeriesView, ThingsBoardTimeSeriesView, ThingsBoardKeysView
 from django.shortcuts import redirect
@@ -42,6 +42,7 @@ urlpatterns = [
     path('api/sentinel-upload/', SentinelImageUploadView.as_view(), name='sentinel-upload'),
     path('api/satellite-images/', SatelliteImageListView.as_view(), name='satellite-images'),
     path('api/image-preview/', ImagePreviewView.as_view(), name='image-preview'),
+    path('api/analysis-image/', AnalysisImageView.as_view(), name='analysis-image'),
     path('api/farms/<int:farm_id>/data/', farm_data_view, name='farm-data'),
     path('api/farms/filter/', farm_filter_view, name='farm-filter'),
     # ThingsBoard IoT sync endpoints

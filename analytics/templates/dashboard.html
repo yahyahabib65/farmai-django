@@ -7,6 +7,11 @@
     <title>FarmAI - My Farm Dashboard</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <!-- Leaflet for interactive maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
     <!-- Chart.js for time series graphs -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
@@ -182,6 +187,27 @@
         .health-badge.yellow { background: #fff8e1; color: #f9a825; }
         .health-badge.red { background: #ffebee; color: #c62828; }
 
+        /* Leaflet Map Styling */
+        #fieldDrawMap {
+            z-index: 1;
+        }
+        
+        .custom-farm-marker {
+            z-index: 1000 !important;
+        }
+        
+        .leaflet-draw-toolbar a {
+            background-color: white;
+        }
+        
+        #fieldBoundaryDisplay.is-invalid {
+            border-color: #dc3545;
+        }
+        
+        #fieldBoundaryDisplay.is-invalid ~ .invalid-feedback {
+            display: block;
+        }
+
         /* Upload Section */
         .upload-card {
             text-align: center;
@@ -270,6 +296,107 @@
         @keyframes slideIn {
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* ===== COMPACT LAYOUT OVERRIDES ===== */
+        .hero {
+            padding: 0.8rem 0;
+            margin-bottom: 0.8rem;
+        }
+        
+        .hero h1 { font-size: 1.5rem; margin-bottom: 0.3rem; }
+        .hero p { margin-bottom: 0; font-size: 0.95rem; }
+
+        .container { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+
+        .card {
+            border-radius: 12px;
+            margin-bottom: 0.75rem;
+        }
+
+        .card-header {
+            padding: 0.6rem 1rem;
+            font-size: 0.95rem;
+        }
+
+        .card-body { padding: 0.75rem 1rem; }
+
+        .stat-card { padding: 0.8rem; border-radius: 12px; }
+        .stat-icon { width: 50px; height: 50px; font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .stat-value { font-size: 1.8rem; }
+        .stat-label { font-size: 0.85rem; }
+
+        .results-area {
+            min-height: 100px;
+            padding: 0.75rem;
+        }
+
+        .upload-card { padding: 1rem; }
+        .upload-icon { width: 60px; height: 60px; font-size: 1.8rem; }
+        .upload-zone { padding: 1rem; }
+
+        .btn-analyze {
+            padding: 0.7rem 1.5rem;
+            font-size: 1rem;
+            border-radius: 10px;
+        }
+
+        /* Satellite imagery preview - compact */
+        .sentinel-preview-container {
+            max-height: 280px;
+        }
+        
+        .sentinel-preview-container img {
+            max-height: 240px;
+            object-fit: contain;
+        }
+
+        /* NDVI/NDWI result images - compact side by side */
+        .ndvi-ndwi-row .card-body {
+            padding: 0.5rem;
+        }
+        
+        .ndvi-ndwi-row .card-body img {
+            max-height: 200px;
+            width: 100%;
+            object-fit: contain;
+        }
+
+        /* Form elements tighter */
+        .form-select, .form-control {
+            padding: 0.6rem 0.9rem;
+            border-radius: 8px;
+        }
+
+        .form-check { margin-bottom: 0.3rem; }
+        .form-label { margin-bottom: 0.3rem; font-size: 0.9rem; }
+
+        /* Map compact */
+        #fieldDrawMap { height: 300px !important; min-height: 250px; }
+
+        /* Navbar compact */
+        .navbar { padding: 0.5rem 1rem; }
+        .navbar-brand { font-size: 1.3rem; }
+
+        /* Footer minimal */
+        .footer { padding: 1rem; font-size: 0.85rem; }
+
+        /* Toast smaller */
+        .toast-notification { max-width: 280px; padding: 0.7rem 1rem; font-size: 0.9rem; }
+
+        /* Row gaps */
+        .row.g-4 { --bs-gutter-y: 0.75rem; --bs-gutter-x: 0.75rem; }
+        .row.g-3 { --bs-gutter-y: 0.5rem; }
+        .mb-4 { margin-bottom: 0.75rem !important; }
+        .mb-3 { margin-bottom: 0.5rem !important; }
+        .py-4 { padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; }
+
+        /* Mobile adjustments */
+        @media (max-width: 767px) {
+            .hero { padding: 0.5rem 0; }
+            .stat-card { padding: 0.6rem; }
+            .stat-value { font-size: 1.5rem; }
+            #fieldDrawMap { height: 220px !important; }
         }
     </style>
 </head>
@@ -416,20 +543,80 @@
                             </div>
                         </div>
 
-                        <button type="button" class="btn btn-analyze" onclick="runAnalysis()" id="analyzeBtn">
+                        <button type="button" class="btn btn-analyze mb-3" onclick="runAnalysis()" id="analyzeBtn">
                             <i class="bi bi-play-fill me-2"></i>
                             <span id="btnText">Analyze My Farm</span>
                         </button>
+                        
+                        <!-- Summary Stats Panel - fills space below button -->
+                        <div id="summaryStatsPanel">
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <div class="bg-white rounded p-2 text-center border shadow-sm">
+                                        <div class="fs-4 fw-bold text-success" id="statNdvi">--</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Crop Health (NDVI)</small>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="bg-white rounded p-2 text-center border shadow-sm">
+                                        <div class="fs-4 fw-bold text-primary" id="statNdwi">--</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Water Level (NDWI)</small>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="bg-white rounded p-2 text-center border shadow-sm">
+                                        <div class="fs-4 fw-bold text-success" id="statHealthy">0</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Healthy Fields</small>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="bg-white rounded p-2 text-center border shadow-sm">
+                                        <div class="fs-4 fw-bold text-warning" id="statAttention">0</div>
+                                        <small class="text-muted" style="font-size: 0.75rem;">Need Attention</small>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- NDVI/NDWI Result Images - Below stats -->
+                            <div class="row g-2 mt-2" id="resultImagesPanel">
+                                <div class="col-6">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-header bg-success text-white py-1 px-2 d-flex justify-content-between align-items-center" style="font-size: 0.8rem;">
+                                            <span><i class="bi bi-tree me-1"></i>NDVI</span>
+                                            <span class="badge bg-light text-success" id="ndviBadge" style="font-size: 0.7rem;">--</span>
+                                        </div>
+                                        <div class="card-body p-1 text-center" id="ndviImageContainer" style="background: #1a1a2e; min-height: 120px;">
+                                            <div class="py-4 text-white-50 small">
+                                                <i class="bi bi-image"></i><br>Run analysis
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-header bg-primary text-white py-1 px-2 d-flex justify-content-between align-items-center" style="font-size: 0.8rem;">
+                                            <span><i class="bi bi-droplet me-1"></i>NDWI</span>
+                                            <span class="badge bg-light text-primary" id="ndwiBadge" style="font-size: 0.7rem;">--</span>
+                                        </div>
+                                        <div class="card-body p-1 text-center" id="ndwiImageContainer" style="background: #1a1a2e; min-height: 120px;">
+                                            <div class="py-4 text-white-50 small">
+                                                <i class="bi bi-image"></i><br>Run analysis
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Results -->
                     <div class="col-lg-8">
                         <h5 class="mb-3"><i class="bi bi-clipboard-data text-success me-2"></i>Analysis Results</h5>
                         <div class="results-area" id="resultsArea">
-                            <div class="text-center text-muted py-5">
-                                <i class="bi bi-graph-up-arrow" style="font-size: 4rem; opacity: 0.3;"></i>
-                                <h5 class="mt-3">Ready to Analyze</h5>
-                                <p>Select your farm and click "Analyze My Farm" to see crop health results</p>
+                            <div class="text-center text-muted py-4">
+                                <i class="bi bi-graph-up-arrow" style="font-size: 3rem; opacity: 0.3;"></i>
+                                <h6 class="mt-2">Ready to Analyze</h6>
+                                <p class="small">Select your farm and click "Analyze My Farm" to see crop health results</p>
                             </div>
                         </div>
                     </div>
@@ -446,13 +633,19 @@
                         <span class="text-muted">Images from Planetary Computer & MinIO</span>
                     </div>
                     <div>
-                        <button class="btn btn-sm btn-outline-primary me-2" onclick="batchAnalyzeAllDates()" id="batchAnalyzeBtn">
+                        <button class="btn btn-sm btn-outline-primary me-2" onclick="batchAnalyzeAllDates()" id="batchAnalyzeBtn" 
+                                title="Analyze all stored satellite images to compute NDVI/NDWI values for each date. Results will be shown in the Charts tab after analysis.">
                             <i class="bi bi-collection-play me-1"></i>Build Time Series
                         </button>
                         <button class="btn btn-sm btn-outline-success" onclick="loadSatelliteImages()">
                             <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                         </button>
                     </div>
+                </div>
+                <div class="alert alert-secondary py-2 mb-3" style="font-size: 0.85rem;">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <strong>Build Time Series</strong>: Analyzes all stored imagery dates to compute NDVI/NDWI values. 
+                    Results are saved to the database and displayed in the <strong>Charts</strong> tab after you click <strong>Analyze My Farm</strong>.
                 </div>
                 <div id="batchProgress" class="alert alert-info d-none mb-3">
                     <div class="d-flex align-items-center">
@@ -651,10 +844,12 @@
                                 <div class="row">
                                     <div class="col-md-6 mb-3">
                                         <label class="form-label">Select Farm <span class="text-danger">*</span></label>
-                                        <select class="form-select" id="fieldFarm" required>
+                                        <select class="form-select" id="fieldFarm" required onchange="onFieldFarmChange()">
                                             <option value="">Choose a farm...</option>
                                             {% for farm in farms %}
-                                            <option value="{{ farm.id }}">{{ farm.name }}</option>
+                                            <option value="{{ farm.id }}" 
+                                                    data-lat="{{ farm.location.y }}" 
+                                                    data-lon="{{ farm.location.x }}">{{ farm.name }}</option>
                                             {% endfor %}
                                         </select>
                                         <div class="invalid-feedback" id="fieldFarmError"></div>
@@ -672,13 +867,32 @@
                                         <div class="invalid-feedback" id="fieldCropError"></div>
                                     </div>
                                     <div class="col-md-6 mb-3">
-                                        <label class="form-label">Boundary (WKT) <span class="text-danger">*</span></label>
-                                        <textarea class="form-control" id="fieldBoundary" rows="3" required 
-                                                  placeholder="POLYGON((lon lat, lon lat, lon lat, lon lat))"></textarea>
-                                        <small class="text-muted">Enter polygon in WKT format. Use <a href="https://geojson.io" target="_blank">geojson.io</a> to draw and convert.</small>
+                                        <label class="form-label">Draw Boundary on Map <span class="text-danger">*</span></label>
+                                        <div class="input-group">
+                                            <span class="input-group-text"><i class="bi bi-map"></i></span>
+                                            <input type="text" class="form-control" id="fieldBoundaryDisplay" readonly placeholder="Draw polygon on map below">
+                                        </div>
+                                        <input type="hidden" id="fieldBoundary">
                                         <div class="invalid-feedback" id="fieldBoundaryError"></div>
                                     </div>
                                 </div>
+                                
+                                <!-- Interactive Map for Drawing Boundary -->
+                                <div class="mb-3">
+                                    <label class="form-label d-flex justify-content-between">
+                                        <span><i class="bi bi-geo-alt me-1 text-success"></i>Draw Field Boundary</span>
+                                        <small class="text-muted">Click farm marker to center map</small>
+                                    </label>
+                                    <div id="fieldDrawMap" style="height: 300px; border-radius: 8px; border: 2px solid #dee2e6;"></div>
+                                    <div class="mt-2 d-flex justify-content-between align-items-center">
+                                        <small class="text-muted">
+                                            <i class="bi bi-info-circle me-1"></i>
+                                            Use the polygon tool (<i class="bi bi-pentagon"></i>) to draw your field boundary
+                                        </small>
+                                        <div id="boundaryValidation" class="small"></div>
+                                    </div>
+                                </div>
+                                
                                 <div id="fieldFormAlert" class="alert d-none mb-3"></div>
                                 <button type="submit" class="btn btn-success" id="addFieldBtn">
                                     <i class="bi bi-plus-lg me-1"></i>Add Field
@@ -949,55 +1163,37 @@
 
                 // Build results HTML
                 let html = satelliteStatus + `
-                    <div class="alert ${data.image_processed ? 'alert-success' : 'alert-info'} mb-3">
+                    <div class="alert ${data.image_processed ? 'alert-success' : 'alert-info'} mb-2 py-2">
                         <i class="bi bi-${data.image_processed ? 'check-circle' : 'info-circle'} me-2"></i>
                         <strong>Analysis Complete!</strong> - ${data.farm_name} (${data.analysis_date})
                         ${data.image_processed ? `<br><small>📷 Processed: ${data.image_source} - ${data.image_file || ''}</small>` : '<br><small>ℹ️ Upload images for real NDVI calculations</small>'}
                     </div>
                     
-                    <!-- Summary Stats -->
-                    <div class="row mb-4">
-                        <div class="col-6 col-md-3 mb-2">
-                            <div class="bg-white rounded p-3 text-center border">
-                                <div class="fs-3 fw-bold text-success">${data.summary.avg_ndvi}</div>
-                                <small class="text-muted">Crop Health (NDVI)</small>
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-3 mb-2">
-                            <div class="bg-white rounded p-3 text-center border">
-                                <div class="fs-3 fw-bold text-primary">${data.summary.avg_ndwi}</div>
-                                <small class="text-muted">Water Level (NDWI)</small>
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-3 mb-2">
-                            <div class="bg-white rounded p-3 text-center border">
-                                <div class="fs-3 fw-bold text-success">${data.summary.healthy_fields}</div>
-                                <small class="text-muted">Healthy Fields</small>
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-3 mb-2">
-                            <div class="bg-white rounded p-3 text-center border">
-                                <div class="fs-3 fw-bold ${data.summary.attention_needed > 0 ? 'text-warning' : 'text-success'}">${data.summary.attention_needed}</div>
-                                <small class="text-muted">Need Attention</small>
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Navigation Tabs -->
-                    <ul class="nav nav-pills nav-fill mb-3" role="tablist">
-                        <li class="nav-item"><a class="nav-link active" data-bs-toggle="pill" href="#fieldsTab">🌾 Fields</a></li>
-                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#chartsTab">📈 Graphs</a></li>
-                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#rawTab">🔬 Raw Data</a></li>
-                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#harvestTab">📅 Harvest</a></li>
-                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#weatherTab">🌤️ Weather</a></li>
-                        <li class="nav-item"><a class="nav-link" data-bs-toggle="pill" href="#carbonTab">🌱 Carbon</a></li>
+                    <ul class="nav nav-pills nav-fill mb-2" role="tablist" style="font-size: 0.80rem;">
+                        <li class="nav-item"><a class="nav-link active py-1" data-bs-toggle="pill" href="#fieldsTab">🌾 Fields</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#imageryTab">🛰️ Imagery</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#chartsTab">📈 Graphs</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#rawTab">🔬 Raw</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#harvestTab">📅 Harvest</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#yieldTab">📊 Yield</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#weatherTab">🌤️ Weather</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#carbonTab">🌱 Carbon</a></li>
+                        <li class="nav-item"><a class="nav-link py-1" data-bs-toggle="pill" href="#irrigationTab">💧 Irrigation</a></li>
                     </ul>
 
                     <div class="tab-content">
                         <!-- Fields Tab -->
                         <div class="tab-pane fade show active" id="fieldsTab">
-                            <h6 class="mb-3"><i class="bi bi-grid-3x3 text-success me-2"></i>Field Details:</h6>
+                            <h6 class="mb-2"><i class="bi bi-grid-3x3 text-success me-2"></i>Field Details:</h6>
                 `;
+                
+                // Update the left-side summary stats panel
+                document.getElementById('statNdvi').textContent = data.summary.avg_ndvi;
+                document.getElementById('statNdwi').textContent = data.summary.avg_ndwi;
+                document.getElementById('statHealthy').textContent = data.summary.healthy_fields;
+                document.getElementById('statAttention').textContent = data.summary.attention_needed;
+                document.getElementById('statAttention').className = data.summary.attention_needed > 0 ? 'fs-4 fw-bold text-warning' : 'fs-4 fw-bold text-success';
 
                 data.results.forEach(result => {
                     const cardClass = result.health_color === 'red' ? 'danger' : (result.health_color === 'yellow' ? 'warning' : '');
@@ -1032,6 +1228,130 @@
                 });
 
                 html += `</div>`;
+
+                // Satellite Imagery Tab - Show processed images
+                html += `
+                    <div class="tab-pane fade" id="imageryTab">
+                        <h6 class="mb-3"><i class="bi bi-satellite text-primary me-2"></i>Satellite Imagery Used for Analysis:</h6>
+                        <div class="row" id="analysisImageryGallery">
+                `;
+                
+                // Display imagery information from analysis
+                if (data.planetary_computer && data.planetary_computer.image_date) {
+                    const pc = data.planetary_computer;
+                    const farmId = document.getElementById('farmSelect').value;
+                    const imageDate = pc.image_date;
+                    
+                    // Show main analysis image
+                    html += `
+                        <div class="col-12 mb-3">
+                            <div class="card border-0 shadow-sm">
+                                <div class="card-header bg-primary text-white">
+                                    <i class="bi bi-calendar-check me-2"></i>
+                                    Analysis Date: <strong>${imageDate}</strong>
+                                    ${pc.cloud_cover ? ` | Cloud Cover: ${pc.cloud_cover}` : ''}
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-md-8">
+                                            <div class="satellite-preview-container" style="position: relative; height: 450px; background: #1a1a2e; border-radius: 8px; overflow: hidden;">
+                                                <img id="sentinelPreviewImg" 
+                                                     src="/api/image-preview/?source=minio&path=farm_${farmId}/${imageDate}/red_B04.tif&width=1200&height=600" 
+                                                     alt="Sentinel Imagery" 
+                                                     data-farm-id="${farmId}" data-date="${imageDate}"
+                                                     style="width: 100%; height: 100%; object-fit: contain;"
+                                                     onerror="this.parentElement.innerHTML='<div class=\\'text-center py-5 text-white\\'><i class=\\'bi bi-image fs-1\\'></i><p class=\\'mt-2\\'>Preview not available</p></div>'">
+                                                <div class="position-absolute bottom-0 start-0 end-0 p-2 bg-dark bg-opacity-75">
+                                                    <div class="d-flex justify-content-center gap-2">
+                                                        <button class="btn btn-sm btn-outline-light" onclick="switchBand('red', '${farmId}', '${imageDate}')">
+                                                            <span style="color: #ff6b6b;">●</span> Red
+                                                        </button>
+                                                        <button class="btn btn-sm btn-outline-light" onclick="switchBand('green', '${farmId}', '${imageDate}')">
+                                                            <span style="color: #51cf66;">●</span> Green
+                                                        </button>
+                                                        <button class="btn btn-sm btn-outline-light" onclick="switchBand('blue', '${farmId}', '${imageDate}')">
+                                                            <span style="color: #339af0;">●</span> Blue
+                                                        </button>
+                                                        <button class="btn btn-sm btn-outline-light" onclick="switchBand('nir', '${farmId}', '${imageDate}')">
+                                                            <span style="color: #ffd43b;">●</span> NIR
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <h6 class="text-success mb-3"><i class="bi bi-layers me-2"></i>Available Bands</h6>
+                                            <div class="list-group list-group-flush">
+                                                ${pc.bands_available ? `
+                                                    <div class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
+                                                        <span><span style="color: #ff6b6b;">●</span> Red (B04)</span>
+                                                        <span class="badge bg-success">Available</span>
+                                                    </div>
+                                                    <div class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
+                                                        <span><span style="color: #51cf66;">●</span> Green (B03)</span>
+                                                        <span class="badge bg-success">Available</span>
+                                                    </div>
+                                                    <div class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
+                                                        <span><span style="color: #339af0;">●</span> Blue (B02)</span>
+                                                        <span class="badge bg-success">Available</span>
+                                                    </div>
+                                                    <div class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
+                                                        <span><span style="color: #ffd43b;">●</span> NIR (B08)</span>
+                                                        <span class="badge bg-success">Available</span>
+                                                    </div>
+                                                ` : '<div class="text-muted">Band info not available</div>'}
+                                            </div>
+                                            <hr>
+                                            <div class="small text-muted">
+                                                <strong>Source:</strong> ${pc.source || 'Planetary Computer'}<br>
+                                                <strong>Satellite:</strong> Sentinel-2<br>
+                                                <strong>Resolution:</strong> 10m/pixel
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Update NDVI/NDWI images in the LEFT PANEL (not in results area)
+                    const ndviImageUrl = data.ndvi_image_url || `/media/results/ndvi/farm_${farmId}_${imageDate}_ndvi.png`;
+                    const ndwiImageUrl = data.ndwi_image_url || `/media/results/ndwi/farm_${farmId}_${imageDate}_ndwi.png`;
+                    
+                    // Update left panel NDVI image
+                    document.getElementById('ndviBadge').textContent = data.summary?.avg_ndvi?.toFixed(3) || '--';
+                    document.getElementById('ndviImageContainer').innerHTML = `
+                        <img src="${ndviImageUrl}" 
+                             alt="NDVI Result"
+                             style="max-width: 100%; max-height: 180px; border-radius: 4px;"
+                             onerror="this.parentElement.innerHTML='<div class=\\'py-3 text-white-50 small\\'><i class=\\'bi bi-hourglass-split\\'></i><br>Generating...</div>'">
+                    `;
+                    
+                    // Update left panel NDWI image
+                    document.getElementById('ndwiBadge').textContent = data.summary?.avg_ndwi?.toFixed(3) || '--';
+                    document.getElementById('ndwiImageContainer').innerHTML = `
+                        <img src="${ndwiImageUrl}" 
+                             alt="NDWI Result"
+                             style="max-width: 100%; max-height: 180px; border-radius: 4px;"
+                             onerror="this.parentElement.innerHTML='<div class=\\'py-3 text-white-50 small\\'><i class=\\'bi bi-hourglass-split\\'></i><br>Generating...</div>'">
+                    `;
+                } else {
+                    // No imagery - reset the left panel
+                    document.getElementById('ndviBadge').textContent = '--';
+                    document.getElementById('ndwiBadge').textContent = '--';
+                    document.getElementById('ndviImageContainer').innerHTML = '<div class="py-3 text-white-50 small"><i class="bi bi-image"></i><br>No imagery</div>';
+                    document.getElementById('ndwiImageContainer').innerHTML = '<div class="py-3 text-white-50 small"><i class="bi bi-image"></i><br>No imagery</div>';
+                    
+                    html += `
+                        <div class="col-12 text-center py-3">
+                            <i class="bi bi-cloud-slash text-muted" style="font-size: 2rem;"></i>
+                            <p class="text-muted mt-2 small">No satellite imagery was used in this analysis.</p>
+                            <small>Enable "Auto-download satellite imagery" and run analysis again.</small>
+                        </div>
+                    `;
+                }
+                
+                html += `</div></div>`;
 
                 // Charts/Graphs Tab - Time Series
                 const timeSeriesSource = data.time_series ? data.time_series.data_source : 'unknown';
@@ -1178,6 +1498,54 @@
                             </div>
                         `;
                     });
+                }
+                html += `</div>`;
+
+                // Yield Prediction Tab (ML-based, real data only)
+                html += `
+                    <div class="tab-pane fade" id="yieldTab">
+                        <h6 class="mb-3"><i class="bi bi-graph-up-arrow text-success me-2"></i>Yield Predictions (ML Model):</h6>
+                        <p class="small text-muted mb-3">Predictions based on real satellite NDVI data - No fake data used</p>
+                `;
+                
+                if (data.yield_predictions && data.yield_predictions.length > 0) {
+                    data.yield_predictions.forEach(yp => {
+                        if (yp.predicted_yield_tonnes && yp.predicted_yield_tonnes !== 'Insufficient data') {
+                            html += `
+                                <div class="bg-white rounded p-3 mb-2 border-start border-4 border-primary">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <strong>${yp.field}</strong> - ${yp.crop}
+                                            <br><span class="badge bg-primary fs-5 mt-2">${yp.predicted_yield_tonnes} tonnes</span>
+                                            <br><small class="text-muted">~${yp.yield_per_ha_kg} kg/ha</small>
+                                        </div>
+                                        <div class="text-end">
+                                            <span class="badge bg-${yp.confidence >= 0.8 ? 'success' : yp.confidence >= 0.6 ? 'warning' : 'secondary'}">
+                                                ${Math.round(yp.confidence * 100)}% confidence
+                                            </span>
+                                            ${yp.yield_range ? `<br><small class="text-muted">Range: ${yp.yield_range.low_tonnes} - ${yp.yield_range.high_tonnes} t</small>` : ''}
+                                        </div>
+                                    </div>
+                                    ${yp.data_quality ? `
+                                        <hr class="my-2">
+                                        <small class="text-muted">
+                                            <i class="bi bi-satellite me-1"></i>${yp.data_quality.ndvi_readings} satellite readings | 
+                                            NDVI: ${yp.data_quality.ndvi_mean} (max: ${yp.data_quality.ndvi_max})
+                                        </small>
+                                    ` : ''}
+                                </div>
+                            `;
+                        } else {
+                            html += `
+                                <div class="bg-light rounded p-3 mb-2 border">
+                                    <strong>${yp.field}</strong> - ${yp.crop}
+                                    <br><small class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>${yp.message || 'Insufficient satellite data for prediction'}</small>
+                                </div>
+                            `;
+                        }
+                    });
+                } else {
+                    html += `<div class="alert alert-info">No yield predictions available. Need at least 3 satellite readings per field.</div>`;
                 }
                 html += `</div>`;
 
@@ -1485,6 +1853,24 @@
             });
         }
 
+        // Switch satellite band preview
+        function switchBand(bandType, farmId, imageDate) {
+            const bandMap = {
+                'red': 'red_B04.tif',
+                'green': 'green_B03.tif',
+                'blue': 'blue_B02.tif',
+                'nir': 'nir_B08.tif'
+            };
+            
+            const img = document.getElementById('sentinelPreviewImg');
+            if (img) {
+                const filename = bandMap[bandType] || 'red_B04.tif';
+                // Use MinIO source for satellite imagery with high resolution
+                img.src = `/api/image-preview/?source=minio&path=farm_${farmId}/${imageDate}/${filename}&width=1200&height=600`;
+                showToast(`Viewing ${bandType.toUpperCase()} band`, 'success');
+            }
+        }
+
         // Load satellite images from API
         function loadSatelliteImages() {
             const gallery = document.getElementById('satelliteGallery');
@@ -1682,13 +2068,22 @@
                 progressBar.style.width = '100%';
                 progressText.textContent = `Complete! Analyzed ${completed} dates${errors > 0 ? ` (${errors} errors)` : ''}`;
                 
-                showToast(`Time series built! ${completed} dates analyzed.`, 'success');
+                showToast(`Time series built! ${completed} dates analyzed. Refreshing charts...`, 'success');
                 
                 // Hide progress after a delay
                 setTimeout(() => {
                     progress.classList.add('d-none');
                     btn.disabled = false;
                 }, 3000);
+                
+                // Automatically trigger analysis to refresh the time series chart
+                setTimeout(() => {
+                    const analyzeBtn = document.getElementById('analyzeBtn');
+                    if (analyzeBtn) {
+                        analyzeBtn.click();
+                        showToast('Loading updated time series chart...', 'info');
+                    }
+                }, 500);
                 
             } catch (error) {
                 showToast('Failed to build time series: ' + error.message, 'error');
@@ -2224,7 +2619,7 @@
             
             // Update modal content
             document.getElementById('modalDate').textContent = date;
-            document.getElementById('modalImage').src = previewUrl.replace('width=200', 'width=600').replace('height=150', 'height=400');
+            document.getElementById('modalImage').src = previewUrl.replace('width=200', 'width=1200').replace('height=150', 'height=800');
             
             // Show bands
             const bandsContainer = document.getElementById('modalBands');
@@ -2265,6 +2660,258 @@
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
             return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
+        
+        // ========== Field Boundary Map Functions ==========
+        
+        let fieldDrawMap = null;
+        let drawnItems = null;
+        let farmMarker = null;
+        let maxDistanceCircle = null;
+        let currentFarmLocation = null;
+        // Get configuration from Django template context (no hardcoded values)
+        const MAX_DISTANCE_KM = {{ max_distance_km|default:50 }};
+        const DEFAULT_LAT = {{ default_lat|default:"31.4697" }};
+        const DEFAULT_LON = {{ default_lon|default:"74.4101" }};
+        const DEFAULT_ZOOM = {{ default_zoom|default:12 }};
+        
+        function initFieldDrawMap() {
+            // Don't reinitialize if already exists
+            if (fieldDrawMap) {
+                fieldDrawMap.invalidateSize();
+                return;
+            }
+            
+            // Use configurable defaults from Django settings
+            const defaultLat = DEFAULT_LAT;
+            const defaultLon = DEFAULT_LON;
+            
+            fieldDrawMap = L.map('fieldDrawMap').setView([defaultLat, defaultLon], DEFAULT_ZOOM + 2);
+            
+            // Add satellite/terrain base layers
+            const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'ESRI'
+            });
+            
+            const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap'
+            });
+            
+            satellite.addTo(fieldDrawMap);
+            
+            L.control.layers({
+                'Satellite': satellite,
+                'Streets': streets
+            }).addTo(fieldDrawMap);
+            
+            // Initialize the FeatureGroup to store editable layers
+            drawnItems = new L.FeatureGroup();
+            fieldDrawMap.addLayer(drawnItems);
+            
+            // Initialize the draw control
+            const drawControl = new L.Control.Draw({
+                draw: {
+                    polygon: {
+                        allowIntersection: false,
+                        showArea: true,
+                        shapeOptions: {
+                            color: '#2e7d32',
+                            fillColor: '#4caf50',
+                            fillOpacity: 0.3
+                        }
+                    },
+                    rectangle: {
+                        shapeOptions: {
+                            color: '#2e7d32',
+                            fillColor: '#4caf50',
+                            fillOpacity: 0.3
+                        }
+                    },
+                    polyline: false,
+                    circle: false,
+                    circlemarker: false,
+                    marker: false
+                },
+                edit: {
+                    featureGroup: drawnItems,
+                    remove: true
+                }
+            });
+            fieldDrawMap.addControl(drawControl);
+            
+            // Handle draw created
+            fieldDrawMap.on(L.Draw.Event.CREATED, function(e) {
+                // Clear previous drawings
+                drawnItems.clearLayers();
+                
+                const layer = e.layer;
+                drawnItems.addLayer(layer);
+                
+                // Convert to WKT
+                const wkt = layerToWKT(layer);
+                document.getElementById('fieldBoundary').value = wkt;
+                
+                // Calculate area
+                const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]);
+                const areaHa = (area / 10000).toFixed(2);
+                document.getElementById('fieldBoundaryDisplay').value = `Polygon drawn (${areaHa} ha)`;
+                
+                // Validate distance from farm
+                validateBoundaryDistance(layer);
+            });
+            
+            // Handle draw deleted
+            fieldDrawMap.on(L.Draw.Event.DELETED, function(e) {
+                document.getElementById('fieldBoundary').value = '';
+                document.getElementById('fieldBoundaryDisplay').value = '';
+                document.getElementById('boundaryValidation').innerHTML = '';
+            });
+            
+            // Handle draw edited
+            fieldDrawMap.on(L.Draw.Event.EDITED, function(e) {
+                const layers = e.layers;
+                layers.eachLayer(function(layer) {
+                    const wkt = layerToWKT(layer);
+                    document.getElementById('fieldBoundary').value = wkt;
+                    
+                    const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]);
+                    const areaHa = (area / 10000).toFixed(2);
+                    document.getElementById('fieldBoundaryDisplay').value = `Polygon drawn (${areaHa} ha)`;
+                    
+                    validateBoundaryDistance(layer);
+                });
+            });
+        }
+        
+        function layerToWKT(layer) {
+            const coords = layer.getLatLngs()[0];
+            const wktCoords = coords.map(c => `${c.lng} ${c.lat}`).join(', ');
+            // Close the polygon
+            const firstCoord = coords[0];
+            return `POLYGON((${wktCoords}, ${firstCoord.lng} ${firstCoord.lat}))`;
+        }
+        
+        function validateBoundaryDistance(layer) {
+            const validationDiv = document.getElementById('boundaryValidation');
+            
+            if (!currentFarmLocation) {
+                validationDiv.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Select a farm to validate distance</span>';
+                return;
+            }
+            
+            // Get centroid of the polygon
+            const bounds = layer.getBounds();
+            const center = bounds.getCenter();
+            
+            // Calculate distance from farm
+            const farmLatLng = L.latLng(currentFarmLocation.lat, currentFarmLocation.lon);
+            const distance = farmLatLng.distanceTo(center);
+            const distanceKm = (distance / 1000).toFixed(2);
+            
+            if (distance > MAX_DISTANCE_KM * 1000) {
+                validationDiv.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle me-1"></i>Too far from farm! ${distanceKm} km (max: ${MAX_DISTANCE_KM} km)</span>`;
+                document.getElementById('fieldBoundary').classList.add('is-invalid');
+            } else if (distance > (MAX_DISTANCE_KM * 0.8) * 1000) {
+                validationDiv.innerHTML = `<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Distance: ${distanceKm} km - approaching limit</span>`;
+                document.getElementById('fieldBoundary').classList.remove('is-invalid');
+            } else {
+                validationDiv.innerHTML = `<span class="text-success"><i class="bi bi-check-circle me-1"></i>Distance: ${distanceKm} km - OK</span>`;
+                document.getElementById('fieldBoundary').classList.remove('is-invalid');
+            }
+        }
+        
+        function onFieldFarmChange() {
+            const farmSelect = document.getElementById('fieldFarm');
+            const selectedOption = farmSelect.options[farmSelect.selectedIndex];
+            
+            if (!selectedOption.value) {
+                // No farm selected, reset map
+                if (farmMarker) {
+                    fieldDrawMap.removeLayer(farmMarker);
+                    farmMarker = null;
+                }
+                if (maxDistanceCircle) {
+                    fieldDrawMap.removeLayer(maxDistanceCircle);
+                    maxDistanceCircle = null;
+                }
+                currentFarmLocation = null;
+                return;
+            }
+            
+            const lat = parseFloat(selectedOption.dataset.lat);
+            const lon = parseFloat(selectedOption.dataset.lon);
+            
+            if (isNaN(lat) || isNaN(lon)) {
+                showToast('Farm has no valid location', 'warning');
+                return;
+            }
+            
+            currentFarmLocation = { lat, lon };
+            
+            // Initialize map if not already done
+            if (!fieldDrawMap) {
+                setTimeout(() => {
+                    initFieldDrawMap();
+                    updateFarmMarkerOnMap(lat, lon, selectedOption.text);
+                }, 100);
+            } else {
+                updateFarmMarkerOnMap(lat, lon, selectedOption.text);
+            }
+        }
+        
+        function updateFarmMarkerOnMap(lat, lon, farmName) {
+            // Remove existing marker and circle
+            if (farmMarker) {
+                fieldDrawMap.removeLayer(farmMarker);
+            }
+            if (maxDistanceCircle) {
+                fieldDrawMap.removeLayer(maxDistanceCircle);
+            }
+            
+            // Add farm marker
+            farmMarker = L.marker([lat, lon], {
+                icon: L.divIcon({
+                    className: 'custom-farm-marker',
+                    html: '<div style="background: #2e7d32; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap;"><i class="bi bi-geo-alt-fill"></i> ' + farmName + '</div>',
+                    iconSize: null,
+                    iconAnchor: [10, 30]
+                })
+            }).addTo(fieldDrawMap);
+            
+            // Add max distance circle
+            maxDistanceCircle = L.circle([lat, lon], {
+                radius: MAX_DISTANCE_KM * 1000,
+                color: '#ff9800',
+                fillColor: '#fff3e0',
+                fillOpacity: 0.1,
+                weight: 2,
+                dashArray: '5, 5'
+            }).addTo(fieldDrawMap);
+            
+            // Center map on farm
+            fieldDrawMap.setView([lat, lon], 14);
+            
+            // Re-validate existing boundary if any
+            if (drawnItems && drawnItems.getLayers().length > 0) {
+                drawnItems.eachLayer(layer => validateBoundaryDistance(layer));
+            }
+        }
+        
+        // Initialize map when Fields tab is shown
+        document.addEventListener('DOMContentLoaded', function() {
+            const fieldsTab = document.getElementById('fields-tab');
+            if (fieldsTab) {
+                fieldsTab.addEventListener('shown.bs.tab', function() {
+                    setTimeout(() => {
+                        initFieldDrawMap();
+                        // If a farm is already selected, show its location
+                        const farmSelect = document.getElementById('fieldFarm');
+                        if (farmSelect && farmSelect.value) {
+                            onFieldFarmChange();
+                        }
+                    }, 200);
+                });
+            }
+        });
         
         // ========== Settings Modal Functions ==========
         
@@ -2474,10 +3121,29 @@
                 hasError = true;
             }
             
-            if (!boundaryWkt.toLowerCase().startsWith('polygon')) {
-                document.getElementById('fieldBoundary').classList.add('is-invalid');
-                document.getElementById('fieldBoundaryError').textContent = 'Boundary must be a valid POLYGON WKT';
+            if (!boundaryWkt) {
+                document.getElementById('fieldBoundaryDisplay').classList.add('is-invalid');
+                document.getElementById('fieldBoundaryError').textContent = 'Please draw a field boundary on the map';
                 hasError = true;
+            } else if (!boundaryWkt.toLowerCase().startsWith('polygon')) {
+                document.getElementById('fieldBoundaryDisplay').classList.add('is-invalid');
+                document.getElementById('fieldBoundaryError').textContent = 'Boundary must be a valid POLYGON';
+                hasError = true;
+            }
+            
+            // Check if boundary is too far from farm (if currentFarmLocation is set)
+            if (!hasError && currentFarmLocation && drawnItems && drawnItems.getLayers().length > 0) {
+                const layer = drawnItems.getLayers()[0];
+                const bounds = layer.getBounds();
+                const center = bounds.getCenter();
+                const farmLatLng = L.latLng(currentFarmLocation.lat, currentFarmLocation.lon);
+                const distance = farmLatLng.distanceTo(center);
+                
+                if (distance > MAX_DISTANCE_KM * 1000) {
+                    document.getElementById('fieldBoundaryDisplay').classList.add('is-invalid');
+                    document.getElementById('fieldBoundaryError').textContent = `Field is too far from farm (${(distance/1000).toFixed(1)} km). Maximum allowed: ${MAX_DISTANCE_KM} km`;
+                    hasError = true;
+                }
             }
             
             if (hasError) return;
@@ -2509,6 +3175,13 @@
                 
                 // Reset form
                 document.getElementById('addFieldForm').reset();
+                document.getElementById('fieldBoundaryDisplay').value = '';
+                document.getElementById('boundaryValidation').innerHTML = '';
+                
+                // Clear drawn items from map
+                if (drawnItems) {
+                    drawnItems.clearLayers();
+                }
                 
                 // Reload fields list
                 loadFieldsList();

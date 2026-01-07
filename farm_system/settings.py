@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -71,7 +72,7 @@ ROOT_URLCONF = 'farm_system.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -156,3 +157,19 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # CRUD import settings
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000  # Increase if you expect large imports
+
+# =============================================================================
+# FARMAI GIS Configuration
+# =============================================================================
+# Default map center coordinates (can be overridden per deployment)
+# Set these to your target region's center point
+FARMAI_DEFAULT_LAT = float(os.environ.get('FARMAI_DEFAULT_LAT', 31.4697))  # Default: Lahore, Pakistan
+FARMAI_DEFAULT_LON = float(os.environ.get('FARMAI_DEFAULT_LON', 74.4101))
+FARMAI_DEFAULT_ZOOM = int(os.environ.get('FARMAI_DEFAULT_ZOOM', 12))
+
+# Maximum distance (km) from farm to field boundary centroid
+FARMAI_MAX_FIELD_DISTANCE_KM = float(os.environ.get('FARMAI_MAX_FIELD_DISTANCE_KM', 50))
+
+# Field area constraints (hectares)
+FARMAI_MIN_FIELD_AREA_HA = float(os.environ.get('FARMAI_MIN_FIELD_AREA_HA', 0.00))
+FARMAI_MAX_FIELD_AREA_HA = float(os.environ.get('FARMAI_MAX_FIELD_AREA_HA', 10000))

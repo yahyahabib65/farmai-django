@@ -1,7 +1,14 @@
 from rest_framework import serializers
+from django.conf import settings
 from django.contrib.gis.geos import GEOSGeometry, Point
 from django.contrib.gis.measure import D
 from .models import Farm, FieldBoundary, Device, Asset
+
+
+# Get configuration from Django settings (with fallbacks)
+MAX_FIELD_DISTANCE_KM = getattr(settings, 'FARMAI_MAX_FIELD_DISTANCE_KM', 50)
+MIN_FIELD_AREA_HA = getattr(settings, 'FARMAI_MIN_FIELD_AREA_HA', 0.00)
+MAX_FIELD_AREA_HA = getattr(settings, 'FARMAI_MAX_FIELD_AREA_HA', 10000)
 
 
 class FarmSerializer(serializers.ModelSerializer):
@@ -69,25 +76,23 @@ class FieldBoundarySerializer(serializers.ModelSerializer):
                 lon_diff = abs(centroid.x - farm.location.x)
                 distance_km = ((lat_diff ** 2 + lon_diff ** 2) ** 0.5) * 111.32
                 
-                # Set maximum allowed distance (50 km by default)
-                max_distance_km = 50
-                
-                if distance_km > max_distance_km:
+                # Use configurable maximum distance from settings
+                if distance_km > MAX_FIELD_DISTANCE_KM:
                     raise serializers.ValidationError({
                         'boundary': f"Field boundary is too far from farm location. "
-                                   f"Distance: {distance_km:.2f} km (max: {max_distance_km} km). "
+                                   f"Distance: {distance_km:.2f} km (max: {MAX_FIELD_DISTANCE_KM} km). "
                                    f"Please ensure the field is within the farm's area."
                     })
                 
-                # Validate boundary area is reasonable (0.01 ha to 10,000 ha)
+                # Validate boundary area is reasonable using configurable limits
                 area_ha = boundary.area / 10000.0  # Convert sq meters to hectares
-                if area_ha < 0.01:
+                if area_ha < MIN_FIELD_AREA_HA:
                     raise serializers.ValidationError({
-                        'boundary': f"Field area is too small ({area_ha:.4f} ha). Minimum is 0.01 ha."
+                        'boundary': f"Field area is too small ({area_ha:.4f} ha). Minimum is {MIN_FIELD_AREA_HA} ha."
                     })
-                if area_ha > 10000:
+                if area_ha > MAX_FIELD_AREA_HA:
                     raise serializers.ValidationError({
-                        'boundary': f"Field area is too large ({area_ha:.2f} ha). Maximum is 10,000 ha."
+                        'boundary': f"Field area is too large ({area_ha:.2f} ha). Maximum is {MAX_FIELD_AREA_HA} ha."
                     })
                     
             except serializers.ValidationError:
@@ -175,10 +180,9 @@ class AssetSerializer(serializers.ModelSerializer):
                 lon_diff = abs(location.x - farm.location.x)
                 distance_km = ((lat_diff ** 2 + lon_diff ** 2) ** 0.5) * 111.32
                 
-                max_distance_km = 50
-                if distance_km > max_distance_km:
+                if distance_km > MAX_FIELD_DISTANCE_KM:
                     raise serializers.ValidationError({
-                        'location': f"Asset location is too far from farm ({distance_km:.2f} km). Max: {max_distance_km} km."
+                        'location': f"Asset location is too far from farm ({distance_km:.2f} km). Max: {MAX_FIELD_DISTANCE_KM} km."
                     })
             except serializers.ValidationError:
                 raise

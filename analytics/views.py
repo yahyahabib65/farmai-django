@@ -96,6 +96,8 @@ class SentinelProcessingView(APIView):
             return Response({"error": str(e)}, status=500)
 
 def dashboard_view(request):
+    from django.conf import settings as django_settings
+    
     farms = Farm.objects.all()
     fields_count = FieldBoundary.objects.count()
     devices_count = Device.objects.count()
@@ -113,11 +115,19 @@ def dashboard_view(request):
     
     images_count = drone_count + sentinel_count
     
+    # Get configurable GIS settings
     context = {
         'farms': farms,
         'fields_count': fields_count,
         'devices_count': devices_count,
         'images_count': images_count,
+        # FarmAI GIS configuration from settings
+        'default_lat': getattr(django_settings, 'FARMAI_DEFAULT_LAT', 31.4697),
+        'default_lon': getattr(django_settings, 'FARMAI_DEFAULT_LON', 74.4101),
+        'default_zoom': getattr(django_settings, 'FARMAI_DEFAULT_ZOOM', 12),
+        'max_distance_km': getattr(django_settings, 'FARMAI_MAX_FIELD_DISTANCE_KM', 50),
+        'min_area_ha': getattr(django_settings, 'FARMAI_MIN_FIELD_AREA_HA', 0.00),
+        'max_area_ha': getattr(django_settings, 'FARMAI_MAX_FIELD_AREA_HA', 10000),
     }
     return render(request, 'dashboard.html', context)
 
@@ -317,5 +327,71 @@ class MicroClimateView(APIView):
             hour_of_day=int(request.data.get('hour_of_day', 12)),
             day_of_year=int(request.data.get('day_of_year', 180))
         )
+        
+        return Response(result)
+
+
+class YieldPredictionView(APIView):
+    """
+    Predict crop yield for a field based on REAL satellite imagery.
+    Uses NDVI time series from ImageReading model - NO fake data.
+    
+    GET /api/analytics/yield/<field_id>/
+    """
+    
+    def get(self, request, field_id):
+        from analytics.ml_models import YieldPredictor
+        from imagery.models import ImageReading
+        from core.models import FieldBoundary
+        
+        try:
+            field = FieldBoundary.objects.get(id=field_id)
+        except FieldBoundary.DoesNotExist:
+            return Response({'error': f'Field {field_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get REAL NDVI/NDWI time series from ImageReading (satellite data)
+        readings = ImageReading.objects.filter(field=field).order_by('acquisition_date')
+        
+        if readings.count() < 3:
+            return Response({
+                'error': 'Insufficient satellite data for yield prediction',
+                'message': f'Need at least 3 satellite readings, found {readings.count()}',
+                'field_id': field_id,
+                'field_name': field.name
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Extract real data
+        ndvi_series = [r.ndvi_mean for r in readings if r.ndvi_mean is not None]
+        ndwi_series = [r.ndwi_mean for r in readings if r.ndwi_mean is not None]
+        dates = [r.acquisition_date.isoformat() for r in readings]
+        
+        # Get area
+        area_ha = float(field.area_hectares) if field.area_hectares else 1.0
+        
+        # Get real temperature data if available
+        from iot.models import WeatherData
+        weather = WeatherData.objects.filter(farm=field.farm).order_by('-timestamp')[:30]
+        temp_series = [w.temperature for w in weather if w.temperature is not None]
+        precip_total = sum([w.precipitation or 0 for w in weather])
+        
+        # Predict using real data only
+        predictor = YieldPredictor()
+        result = predictor.predict(
+            ndvi_series=ndvi_series,
+            ndwi_series=ndwi_series,
+            dates=dates,
+            crop_type=field.crop_type,
+            area_ha=area_ha,
+            temperature_series=temp_series if temp_series else None,
+            precipitation_total=precip_total if precip_total > 0 else None
+        )
+        
+        result['field_id'] = field_id
+        result['field_name'] = field.name
+        result['satellite_readings'] = len(ndvi_series)
+        result['date_range'] = {
+            'first': dates[0] if dates else None,
+            'last': dates[-1] if dates else None
+        }
         
         return Response(result)
