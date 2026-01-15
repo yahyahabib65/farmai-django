@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 from imagery.views import DroneImageViewSet, DroneImageUploadView, AnalyticsView, SentinelImageUploadView, SatelliteImageListView, ImagePreviewView, AnalysisImageView
 from core.views import FarmViewSet, FieldBoundaryViewSet, DeviceViewSet, AssetViewSet, ManualImportView, farm_data_view, farm_filter_view
@@ -59,5 +60,8 @@ urlpatterns = [
     # Imagery workflows
     path('api/imagery/', include('imagery.urls')),
     path('api/', include(router.urls)),
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),  # OpenAPI schema
+    path('api/docs/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),  # Swagger UI
+    path('api/docs/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),  # ReDoc
     path('', home_view, name='home'),
 ]

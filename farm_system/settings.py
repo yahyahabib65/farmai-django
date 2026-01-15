@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'imagery',
     'analytics',
     'import_export',
+    "drf_spectacular",
 ]
 
 MIDDLEWARE = [
@@ -173,3 +174,7 @@ FARMAI_MAX_FIELD_DISTANCE_KM = float(os.environ.get('FARMAI_MAX_FIELD_DISTANCE_K
 # Field area constraints (hectares)
 FARMAI_MIN_FIELD_AREA_HA = float(os.environ.get('FARMAI_MIN_FIELD_AREA_HA', 0.00))
 FARMAI_MAX_FIELD_AREA_HA = float(os.environ.get('FARMAI_MAX_FIELD_AREA_HA', 10000))
+
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
