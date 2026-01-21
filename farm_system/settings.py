@@ -94,11 +94,11 @@ WSGI_APPLICATION = 'farm_system.wsgi.application'
 DATABASES = {
 'default': {
         'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': 'farmdb',
-        'USER': 'farm_user',      # The user we just created
-        'PASSWORD': 'farm_pass',  # The password we just set
+        'NAME': 'farmai',
+        'USER': 'farmai',      # The user we just created
+        'PASSWORD': 'farmai_pass',  # The password we just set
         'HOST': 'localhost',
-        'PORT': '5433',
+        'PORT': '5432',
     }
 }
 
