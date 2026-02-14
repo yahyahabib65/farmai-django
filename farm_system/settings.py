@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'iot',
     'imagery',
     'analytics',
+    'ai_engine',
     'import_export',
     "drf_spectacular",
 ]
@@ -138,6 +139,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # Celery Configuration
@@ -178,3 +180,5 @@ FARMAI_MAX_FIELD_AREA_HA = float(os.environ.get('FARMAI_MAX_FIELD_AREA_HA', 1000
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

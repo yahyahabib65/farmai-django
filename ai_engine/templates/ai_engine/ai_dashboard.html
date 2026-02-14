@@ -1,0 +1,605 @@
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FarmAI — AI Engine Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        :root { --green-dark:#1b5e20; --green-main:#2e7d32; --green-light:#4caf50; --orange:#f57c00; --blue:#1976d2; --purple:#7b1fa2; }
+        body { font-family:'Segoe UI',sans-serif; background:linear-gradient(180deg,#f0f7f0 0%,#e8f5e9 100%); min-height:100vh; }
+        .navbar { background:linear-gradient(135deg,var(--green-dark),var(--green-main)); padding:.5rem 1rem; }
+        .navbar-brand { font-size:1.3rem; font-weight:700; color:white!important; }
+        .nav-link { color:rgba(255,255,255,.9)!important; font-weight:500; margin:0 .5rem; }
+        .nav-link:hover,.nav-link.active { color:white!important; }
+        .hero { background:linear-gradient(135deg,var(--purple),var(--blue)); color:white; padding:.8rem 0; margin-bottom:.8rem; }
+        .hero h1 { font-weight:700; font-size:1.5rem; margin-bottom:.3rem; }
+        .stat-card { background:white; border-radius:12px; padding:.8rem; text-align:center; box-shadow:0 4px 15px rgba(0,0,0,.08); transition:transform .2s; }
+        .stat-card:hover { transform:translateY(-5px); }
+        .stat-icon { width:50px; height:50px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto .5rem; font-size:1.5rem; }
+        .stat-icon.purple { background:#f3e5f5; color:var(--purple); }
+        .stat-icon.blue { background:#e3f2fd; color:var(--blue); }
+        .stat-icon.green { background:#e8f5e9; color:var(--green-main); }
+        .stat-icon.orange { background:#fff3e0; color:var(--orange); }
+        .stat-value { font-size:1.8rem; font-weight:700; color:#333; }
+        .stat-label { color:#666; font-size:.85rem; }
+        .card { border:none; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,.08); overflow:hidden; margin-bottom:.75rem; }
+        .card-header { background:white; border-bottom:2px solid #f0f0f0; padding:.6rem 1rem; font-weight:600; font-size:.95rem; }
+        .card-body { padding:.75rem 1rem; }
+        .train-card { border:3px solid var(--purple); }
+        .train-card .card-header { background:linear-gradient(135deg,var(--purple),#9c27b0); color:white; }
+        .infer-card { border:3px solid var(--blue); }
+        .infer-card .card-header { background:linear-gradient(135deg,var(--blue),#42a5f5); color:white; }
+        .btn-train { background:linear-gradient(135deg,var(--purple),#9c27b0); border:none; color:white; padding:.6rem 1.5rem; font-weight:600; border-radius:10px; }
+        .btn-train:hover { background:linear-gradient(135deg,#4a148c,var(--purple)); color:white; }
+        .btn-infer { background:linear-gradient(135deg,var(--blue),#42a5f5); border:none; color:white; padding:.6rem 1.5rem; font-weight:600; border-radius:10px; }
+        .btn-infer:hover { background:linear-gradient(135deg,#0d47a1,var(--blue)); color:white; }
+        .job-row { background:white; border-radius:8px; padding:.5rem .75rem; margin-bottom:.4rem; border-left:4px solid #ccc; font-size:.85rem; }
+        .job-row.completed { border-left-color:var(--green-main); }
+        .job-row.running { border-left-color:var(--orange); }
+        .job-row.failed { border-left-color:#c62828; }
+        .job-row.pending { border-left-color:#9e9e9e; }
+        .toast-notification { position:fixed; top:20px; right:20px; padding:.7rem 1rem; border-radius:10px; color:white; font-weight:500; z-index:9999; animation:slideIn .3s ease; max-width:300px; font-size:.9rem; }
+        .toast-notification.success { background:var(--green-main); }
+        .toast-notification.error { background:#c62828; }
+        .toast-notification.info { background:var(--blue); }
+        @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+        .badge-model { font-size:.7rem; padding:.3rem .6rem; border-radius:8px; }
+        .results-scroll { max-height:400px; overflow-y:auto; }
+        .footer { text-align:center; padding:1rem; color:#666; font-size:.85rem; }
+    </style>
+</head>
+<body>
+    <!-- Navigation (matches main dashboard) -->
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/"><i class="bi bi-tree-fill me-2"></i>FarmAI</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"><span class="navbar-toggler-icon"></span></button>
+            <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item"><a class="nav-link" href="/analytics/dashboard/"><i class="bi bi-house-door me-1"></i>Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/ai/"><i class="bi bi-robot me-1"></i>AI Engine</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/admin/"><i class="bi bi-gear me-1"></i>Admin</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/api/docs/swagger/"><i class="bi bi-book me-1"></i>API Docs</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <div class="hero">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h1><i class="bi bi-robot me-2"></i>AI Engine — Model Training &amp; Inference</h1>
+                    <p class="mb-0 opacity-75">Train ML models on your farm data, run inference, monitor results</p>
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <span class="badge bg-light text-dark px-3 py-2 fs-6"><i class="bi bi-calendar3 me-1"></i>{{ "now"|date:"M d, Y" }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Quick Stats -->
+        <div class="row mb-3" id="aiStats">
+            <div class="col-6 col-md-3 mb-2">
+                <div class="stat-card"><div class="stat-icon purple"><i class="bi bi-cpu-fill"></i></div><div class="stat-value" id="statModels">{{ ml_models|length }}</div><div class="stat-label">Trained Models</div></div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+                <div class="stat-card"><div class="stat-icon blue"><i class="bi bi-lightning-fill"></i></div><div class="stat-value" id="statInferences">{{ recent_inferences|length }}</div><div class="stat-label">Inferences Run</div></div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+                <div class="stat-card"><div class="stat-icon green"><i class="bi bi-check-circle-fill"></i></div><div class="stat-value" id="statCompleted">0</div><div class="stat-label">Jobs Completed</div></div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+                <div class="stat-card"><div class="stat-icon orange"><i class="bi bi-geo-alt-fill"></i></div><div class="stat-value">{{ fields|length }}</div><div class="stat-label">Fields Available</div></div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- ═══ LEFT: Train Models ═══ -->
+            <div class="col-lg-6 mb-3">
+                <div class="card train-card">
+                    <div class="card-header"><i class="bi bi-mortarboard-fill me-2"></i>Train ML Models</div>
+                    <div class="card-body">
+                        <p class="small text-muted mb-3">Select a model type and farm, then train directly on your real satellite + IoT data.</p>
+
+                        <!-- Model Type -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Model Type:</label>
+                            <select id="trainModelType" class="form-select">
+                                <option value="irrigation_classification">💧 Irrigation Classifier (RandomForest)</option>
+                                <option value="yield_prediction">📊 Yield Predictor (GradientBoosting)</option>
+                                <option value="microclimate">🌡️ MicroClimate Predictor (GradientBoosting)</option>
+                            </select>
+                        </div>
+
+                        <!-- Farm selector -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Train on Farm:</label>
+                            <select id="trainFarm" class="form-select">
+                                <option value="">All Farms (use all data)</option>
+                                {% for farm in farms %}
+                                <option value="{{ farm.id }}">{{ farm.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <button class="btn btn-train w-100 mb-3" onclick="startTraining()" id="trainBtn">
+                            <i class="bi bi-play-fill me-1"></i><span id="trainBtnText">Start Training</span>
+                        </button>
+
+                        <!-- Training progress -->
+                        <div id="trainProgress" class="alert alert-info py-2 d-none">
+                            <div class="d-flex align-items-center">
+                                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                <span id="trainProgressText">Training in progress...</span>
+                            </div>
+                        </div>
+
+                        <!-- Training result -->
+                        <div id="trainResult" class="d-none"></div>
+
+                        <hr>
+                        <h6 class="mb-2"><i class="bi bi-clock-history me-2"></i>Training History</h6>
+                        <div id="trainingHistory" class="results-scroll">
+                            {% for job in training_jobs %}
+                            <div class="job-row {{ job.status }}">
+                                <div class="d-flex justify-content-between">
+                                    <strong>{{ job.get_model_type_display }}</strong>
+                                    <span class="badge bg-{{ job.status|default:'secondary' }} badge-model">{{ job.status }}</span>
+                                </div>
+                                <small class="text-muted">{{ job.created_at|timesince }} ago</small>
+                                {% if job.result_metrics.accuracy %}
+                                <small class="text-success ms-2">Acc: {{ job.result_metrics.accuracy|floatformat:2 }}</small>
+                                {% endif %}
+                                {% if job.result_metrics.r2_score %}
+                                <small class="text-success ms-2">R²: {{ job.result_metrics.r2_score|floatformat:3 }}</small>
+                                {% endif %}
+                            </div>
+                            {% empty %}
+                            <div class="text-center text-muted py-3"><i class="bi bi-inbox" style="font-size:2rem;opacity:.3;"></i><p class="mt-1 small">No training jobs yet</p></div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Model Registry -->
+                <div class="card">
+                    <div class="card-header"><i class="bi bi-collection me-2 text-purple"></i>Model Registry</div>
+                    <div class="card-body">
+                        <div id="modelRegistry">
+                            {% for model in ml_models %}
+                            <div class="job-row completed">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <strong>{{ model.name }}</strong> <span class="badge bg-secondary badge-model">v{{ model.version }}</span>
+                                        <br><small class="text-muted">{{ model.architecture }} · {{ model.framework }}</small>
+                                    </div>
+                                    <div class="text-end">
+                                        {% if model.accuracy %}<span class="badge bg-success badge-model">Acc: {{ model.accuracy|floatformat:2 }}</span>{% endif %}
+                                        {% if model.r2_score %}<span class="badge bg-primary badge-model">R²: {{ model.r2_score|floatformat:3 }}</span>{% endif %}
+                                        {% if model.training_samples %}<br><small class="text-muted">{{ model.training_samples }} samples</small>{% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% empty %}
+                            <div class="text-center text-muted py-3"><p class="small">No models trained yet. Start training above!</p></div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ RIGHT: Run Inference ═══ -->
+            <div class="col-lg-6 mb-3">
+                <div class="card infer-card">
+                    <div class="card-header"><i class="bi bi-lightning-fill me-2"></i>Run AI Inference</div>
+                    <div class="card-body">
+                        <p class="small text-muted mb-3">Run trained models on your fields to get predictions and anomaly alerts.</p>
+
+                        <!-- Workflow -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Workflow:</label>
+                            <select id="inferWorkflow" class="form-select">
+                                <option value="crop_classification">🌾 Crop Classification (EuroSAT → Pakistan crops)</option>
+                                <option value="ndvi_anomaly">📉 NDVI Anomaly Detection (time-series)</option>
+                                <option value="soil_moisture">💧 Soil Moisture Estimation (sensor + satellite fusion)</option>
+                            </select>
+                        </div>
+
+                        <!-- Field -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Target Field:</label>
+                            <select id="inferField" class="form-select">
+                                {% for field in fields %}
+                                <option value="{{ field.id }}">{{ field.farm.name }} / {{ field.name }} ({{ field.crop_type }})</option>
+                                {% endfor %}
+                                {% if not fields %}
+                                <option value="">No fields — add one in the main dashboard</option>
+                                {% endif %}
+                            </select>
+                        </div>
+
+                        <button class="btn btn-infer w-100 mb-3" onclick="runInference()" id="inferBtn">
+                            <i class="bi bi-play-fill me-1"></i><span id="inferBtnText">Run Inference</span>
+                        </button>
+
+                        <!-- Inference progress -->
+                        <div id="inferProgress" class="alert alert-info py-2 d-none">
+                            <div class="d-flex align-items-center">
+                                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                <span id="inferProgressText">Running inference...</span>
+                            </div>
+                        </div>
+
+                        <!-- Inference result -->
+                        <div id="inferResult" class="d-none"></div>
+
+                        <hr>
+                        <h6 class="mb-2"><i class="bi bi-clipboard-data me-2"></i>Recent Inference Results</h6>
+                        <div id="inferenceHistory" class="results-scroll">
+                            {% for r in recent_inferences %}
+                            <div class="job-row completed">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <strong>{{ r.model.name }}</strong>
+                                        <br><small class="text-muted">{{ r.field.name }} · {{ r.source_type }}</small>
+                                    </div>
+                                    <div class="text-end">
+                                        <span class="badge bg-{{ r.confidence|floatformat:0|default:'secondary' }} badge-model" style="background:{% if r.confidence >= 0.7 %}#2e7d32{% elif r.confidence >= 0.4 %}#f57c00{% else %}#9e9e9e{% endif %}!important;">
+                                            {{ r.confidence|floatformat:2 }}
+                                        </span>
+                                        <br><small class="text-muted">{{ r.processed_at|timesince }} ago</small>
+                                    </div>
+                                </div>
+                            </div>
+                            {% empty %}
+                            <div class="text-center text-muted py-3"><i class="bi bi-lightning" style="font-size:2rem;opacity:.3;"></i><p class="mt-1 small">No inference results yet</p></div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Run All Workflows -->
+                <div class="card">
+                    <div class="card-header bg-success text-white"><i class="bi bi-play-circle me-2"></i>Run All Workflows on Field</div>
+                    <div class="card-body">
+                        <p class="small text-muted">Run all AI workflows in sequence on a selected field.</p>
+                        <div class="mb-3">
+                            <select id="allField" class="form-select">
+                                {% for field in fields %}
+                                <option value="{{ field.id }}">{{ field.farm.name }} / {{ field.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <button class="btn btn-success w-100" onclick="runAllWorkflows()" id="allBtn">
+                            <i class="bi bi-collection-play me-1"></i><span id="allBtnText">Run All (Classification + Anomaly + Moisture)</span>
+                        </button>
+                        <div id="allProgress" class="mt-2 d-none">
+                            <div class="progress" style="height:6px;">
+                                <div id="allProgressBar" class="progress-bar bg-success progress-bar-striped progress-bar-animated" style="width:0%"></div>
+                            </div>
+                            <small id="allProgressText" class="text-muted"></small>
+                        </div>
+                        <div id="allResults" class="mt-2"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer"><i class="bi bi-robot text-purple me-2"></i>FarmAI AI Engine — Open-Source Farm Analytics</div>
+
+    <script>
+        function getCsrfToken() {
+            const cookies = document.cookie.split(';');
+            for (let c of cookies) { const [n, v] = c.trim().split('='); if (n === 'csrftoken') return v; }
+            return '';
+        }
+
+        function showToast(msg, type='success') {
+            const t = document.createElement('div');
+            t.className = `toast-notification ${type}`;
+            t.innerHTML = `<i class="bi bi-${type==='success'?'check-circle':type==='error'?'x-circle':'info-circle'} me-2"></i>${msg}`;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 4000);
+        }
+
+        // ═══ Load stats on page load ═══
+        function loadStats() {
+            fetch('/ai/stats/')
+            .then(r => r.json())
+            .then(d => {
+                document.getElementById('statModels').textContent = d.total_models;
+                document.getElementById('statInferences').textContent = d.total_inferences;
+                document.getElementById('statCompleted').textContent = d.completed_trainings;
+            });
+        }
+
+        // ═══ TRAINING ═══
+        function startTraining() {
+            const btn = document.getElementById('trainBtn');
+            const txt = document.getElementById('trainBtnText');
+            const progress = document.getElementById('trainProgress');
+            const result = document.getElementById('trainResult');
+
+            const modelType = document.getElementById('trainModelType').value;
+            const farmId = document.getElementById('trainFarm').value;
+
+            btn.disabled = true;
+            txt.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Training...';
+            progress.classList.remove('d-none');
+            result.classList.add('d-none');
+
+            fetch('/ai/train/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify({ model_type: modelType, farm_id: farmId || null })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'queued') {
+                    document.getElementById('trainProgressText').textContent = `Job #${data.job_id} queued — polling status...`;
+                    pollTrainingStatus(data.job_id);
+                } else {
+                    btn.disabled = false;
+                    txt.innerHTML = '<i class="bi bi-play-fill me-1"></i>Start Training';
+                    progress.classList.add('d-none');
+                    result.className = 'alert alert-warning';
+                    result.classList.remove('d-none');
+                    result.innerHTML = `<i class="bi bi-info-circle me-2"></i>${data.message || 'Training not available for this type'}`;
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                txt.innerHTML = '<i class="bi bi-play-fill me-1"></i>Start Training';
+                progress.classList.add('d-none');
+                showToast('Training request failed', 'error');
+            });
+        }
+
+        function pollTrainingStatus(jobId) {
+            const poll = setInterval(() => {
+                fetch(`/ai/train/${jobId}/status/`)
+                .then(r => r.json())
+                .then(data => {
+                    const progress = document.getElementById('trainProgress');
+                    const progressText = document.getElementById('trainProgressText');
+
+                    if (data.status === 'running') {
+                        progressText.textContent = `Job #${jobId} running... ${data.log || ''}`;
+                    } else if (data.status === 'completed') {
+                        clearInterval(poll);
+                        progress.classList.add('d-none');
+                        document.getElementById('trainBtn').disabled = false;
+                        document.getElementById('trainBtnText').innerHTML = '<i class="bi bi-play-fill me-1"></i>Start Training';
+
+                        const result = document.getElementById('trainResult');
+                        result.className = 'alert alert-success';
+                        result.classList.remove('d-none');
+
+                        let metricsHtml = '<strong>✅ Training Complete!</strong><br>';
+                        const m = data.metrics;
+                        if (m.accuracy) metricsHtml += `Accuracy: <strong>${(m.accuracy*100).toFixed(1)}%</strong><br>`;
+                        if (m.r2_score) metricsHtml += `R² Score: <strong>${m.r2_score.toFixed(3)}</strong><br>`;
+                        if (m.rmse) metricsHtml += `RMSE: <strong>${m.rmse.toFixed(1)}</strong><br>`;
+                        if (m.temperature_r2) metricsHtml += `Temp R²: <strong>${m.temperature_r2.toFixed(3)}</strong> | Humidity R²: <strong>${m.humidity_r2.toFixed(3)}</strong><br>`;
+                        if (m.n_samples) metricsHtml += `<small class="text-muted">Trained on ${m.n_samples} samples</small>`;
+                        result.innerHTML = metricsHtml;
+
+                        showToast('Model trained successfully!', 'success');
+                        loadStats();
+                        loadTrainingHistory();
+                        loadModelRegistry();
+                    } else if (data.status === 'failed') {
+                        clearInterval(poll);
+                        progress.classList.add('d-none');
+                        document.getElementById('trainBtn').disabled = false;
+                        document.getElementById('trainBtnText').innerHTML = '<i class="bi bi-play-fill me-1"></i>Start Training';
+
+                        const result = document.getElementById('trainResult');
+                        result.className = 'alert alert-danger';
+                        result.classList.remove('d-none');
+                        result.innerHTML = `<strong>❌ Training Failed</strong><br><small>${data.error}</small>`;
+                        showToast('Training failed', 'error');
+                    }
+                });
+            }, 2000);
+        }
+
+        function loadTrainingHistory() {
+            fetch('/ai/train/history/')
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('trainingHistory');
+                if (data.jobs.length === 0) {
+                    container.innerHTML = '<div class="text-center text-muted py-3"><p class="small">No training jobs yet</p></div>';
+                    return;
+                }
+                container.innerHTML = data.jobs.map(j => `
+                    <div class="job-row ${j.status}">
+                        <div class="d-flex justify-content-between">
+                            <strong>${j.model_type_display}</strong>
+                            <span class="badge bg-${j.status==='completed'?'success':j.status==='running'?'warning':j.status==='failed'?'danger':'secondary'} badge-model">${j.status}</span>
+                        </div>
+                        <small class="text-muted">${new Date(j.created_at).toLocaleString()}</small>
+                        ${j.metrics && j.metrics.accuracy ? `<small class="text-success ms-2">Acc: ${(j.metrics.accuracy*100).toFixed(1)}%</small>` : ''}
+                        ${j.metrics && j.metrics.r2_score ? `<small class="text-success ms-2">R²: ${j.metrics.r2_score.toFixed(3)}</small>` : ''}
+                    </div>
+                `).join('');
+            });
+        }
+
+        function loadModelRegistry() {
+            fetch('/ai/models/')
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('modelRegistry');
+                if (data.models.length === 0) {
+                    container.innerHTML = '<div class="text-center text-muted py-3"><p class="small">No models trained yet</p></div>';
+                    return;
+                }
+                container.innerHTML = data.models.map(m => `
+                    <div class="job-row completed">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <strong>${m.name}</strong> <span class="badge bg-secondary badge-model">v${m.version}</span>
+                                <br><small class="text-muted">${m.architecture} · ${m.framework}</small>
+                            </div>
+                            <div class="text-end">
+                                ${m.accuracy ? `<span class="badge bg-success badge-model">Acc: ${(m.accuracy*100).toFixed(1)}%</span>` : ''}
+                                ${m.r2_score ? `<span class="badge bg-primary badge-model">R²: ${m.r2_score.toFixed(3)}</span>` : ''}
+                                ${m.training_samples ? `<br><small class="text-muted">${m.training_samples} samples</small>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            });
+        }
+
+        // ═══ INFERENCE ═══
+        function runInference() {
+            const btn = document.getElementById('inferBtn');
+            const txt = document.getElementById('inferBtnText');
+            const progress = document.getElementById('inferProgress');
+            const result = document.getElementById('inferResult');
+
+            const workflow = document.getElementById('inferWorkflow').value;
+            const fieldId = document.getElementById('inferField').value;
+
+            if (!fieldId) { showToast('Select a field first', 'info'); return; }
+
+            btn.disabled = true;
+            txt.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Running...';
+            progress.classList.remove('d-none');
+            result.classList.add('d-none');
+
+            fetch('/ai/infer/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify({ workflow, field_id: parseInt(fieldId) })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btn.disabled = false;
+                txt.innerHTML = '<i class="bi bi-play-fill me-1"></i>Run Inference';
+                progress.classList.add('d-none');
+
+                if (data.error) {
+                    result.className = 'alert alert-danger';
+                    result.classList.remove('d-none');
+                    result.innerHTML = `<i class="bi bi-x-circle me-2"></i>${data.error}`;
+                    return;
+                }
+
+                result.className = 'alert alert-success';
+                result.classList.remove('d-none');
+                result.innerHTML = `<strong>✅ Queued!</strong> Task ${data.task_id}<br><small>Field: ${data.field} | Workflow: ${data.workflow}</small>`;
+
+                showToast(`Inference queued for ${data.field}`, 'success');
+                // Refresh results after delay
+                setTimeout(() => {
+                    loadInferenceResults(fieldId);
+                    loadStats();
+                }, 3000);
+            })
+            .catch(() => {
+                btn.disabled = false;
+                txt.innerHTML = '<i class="bi bi-play-fill me-1"></i>Run Inference';
+                progress.classList.add('d-none');
+                showToast('Inference request failed', 'error');
+            });
+        }
+
+        function loadInferenceResults(fieldId) {
+            if (!fieldId) return;
+            fetch(`/ai/results/${fieldId}/`)
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('inferenceHistory');
+                if (!data.results || data.results.length === 0) return;
+                container.innerHTML = data.results.map(r => {
+                    const confColor = r.confidence >= 0.7 ? '#2e7d32' : r.confidence >= 0.4 ? '#f57c00' : '#9e9e9e';
+                    return `
+                    <div class="job-row completed">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <strong>${r.model}</strong>
+                                <br><small class="text-muted">${r.source_type} · ${r.model_type}</small>
+                                ${r.prediction && r.prediction.detected_crop ? `<br><span class="badge bg-success">${r.prediction.detected_crop}</span>` : ''}
+                                ${r.prediction && r.prediction.anomalies_found !== undefined ? `<br><small>${r.prediction.anomalies_found} anomalies found</small>` : ''}
+                                ${r.prediction && r.prediction.estimated_moisture ? `<br><small>Moisture: ${r.prediction.estimated_moisture}%</small>` : ''}
+                            </div>
+                            <div class="text-end">
+                                <span class="badge badge-model" style="background:${confColor}!important;color:white;">${(r.confidence*100).toFixed(0)}%</span>
+                                <br><small class="text-muted">${new Date(r.processed_at).toLocaleString()}</small>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('');
+            });
+        }
+
+        // ═══ RUN ALL WORKFLOWS ═══
+        async function runAllWorkflows() {
+            const btn = document.getElementById('allBtn');
+            const txt = document.getElementById('allBtnText');
+            const progress = document.getElementById('allProgress');
+            const bar = document.getElementById('allProgressBar');
+            const pText = document.getElementById('allProgressText');
+            const results = document.getElementById('allResults');
+            const fieldId = document.getElementById('allField').value;
+
+            if (!fieldId) { showToast('Select a field', 'info'); return; }
+
+            btn.disabled = true;
+            txt.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Running...';
+            progress.classList.remove('d-none');
+            results.innerHTML = '';
+
+            const workflows = ['crop_classification', 'ndvi_anomaly', 'soil_moisture'];
+            const names = ['🌾 Crop Classification', '📉 NDVI Anomaly', '💧 Soil Moisture'];
+
+            for (let i = 0; i < workflows.length; i++) {
+                bar.style.width = `${((i) / workflows.length) * 100}%`;
+                pText.textContent = `Running ${names[i]}...`;
+
+                try {
+                    const resp = await fetch('/ai/infer/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                        body: JSON.stringify({ workflow: workflows[i], field_id: parseInt(fieldId) })
+                    });
+                    const data = await resp.json();
+                    results.innerHTML += `<div class="alert alert-success py-1 mb-1"><small>${names[i]}: ✅ Queued (${data.task_id || 'ok'})</small></div>`;
+                } catch (e) {
+                    results.innerHTML += `<div class="alert alert-danger py-1 mb-1"><small>${names[i]}: ❌ Failed</small></div>`;
+                }
+            }
+
+            bar.style.width = '100%';
+            pText.textContent = 'All workflows complete!';
+            btn.disabled = false;
+            txt.innerHTML = '<i class="bi bi-collection-play me-1"></i>Run All';
+            showToast('All AI workflows queued!', 'success');
+
+            setTimeout(() => {
+                loadInferenceResults(fieldId);
+                loadStats();
+            }, 3000);
+        }
+
+        // ═══ INIT ═══
+        document.addEventListener('DOMContentLoaded', () => {
+            loadStats();
+        });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

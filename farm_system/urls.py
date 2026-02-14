@@ -37,6 +37,7 @@ def home_view(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('analytics/', include('analytics.urls')),
+    path('ai/', include('ai_engine.urls')),
     path('api/manual-import/', ManualImportView.as_view(), name='manual-import'),
     path('api/drone-upload/', DroneImageUploadView.as_view(), name='drone-upload'),
     path('api/analytics/run/', AnalyticsView.as_view(), name='analytics-run'),
