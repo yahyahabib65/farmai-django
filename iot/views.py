@@ -263,11 +263,23 @@ class FarmSensorSummaryView(APIView):
 
 
 class SensorTimeSeriesView(APIView):
-    """Get time series sensor data for charts - grouped by sensor"""
+    """
+    Get time series sensor data for charts — fully dynamic keys,
+    outlier filtering, downsampling, custom date ranges and Kalman smoothing.
+    """
     permission_classes = (AllowAny,)
 
+    # Maximum points to send to the chart (prevents browser lag)
+    MAX_CHART_POINTS = 800
+
     def get(self, request, farm_id=None):
-        """Get time series data for all sensors in the farm"""
+        """
+        GET /api/iot/timeseries/{farm_id}/
+        Query params:
+          days   = 7 | 30 | all | ...  (simple preset)
+          start  = ISO date or epoch‑ms (custom range start)
+          end    = ISO date or epoch‑ms (custom range end)
+        """
         if farm_id:
             try:
                 farm = Farm.objects.get(id=farm_id)
@@ -275,156 +287,159 @@ class SensorTimeSeriesView(APIView):
                 return Response({'error': 'Farm not found'}, status=status.HTTP_404_NOT_FOUND)
         else:
             farm = Farm.objects.first()
-        
+
+        from django.utils import timezone as tz
+        import numpy as np
+
+        # ── 1. Resolve date range ──────────────────────────────
+        start_param = request.query_params.get('start')
+        end_param = request.query_params.get('end')
         days_param = request.query_params.get('days', '7')
-        
-        # Get sensor readings
-        from django.utils import timezone
-        
-        # Handle "all" time or specific number of days
-        if days_param == 'all':
-            readings = SensorReading.objects.filter(
-                device__farm=farm
-            ).select_related('device').order_by('timestamp')
+
+        now = tz.now()
+
+        if start_param and end_param:
+            start_date = self._parse_dt(start_param)
+            end_date = self._parse_dt(end_param)
+            period_label = f'{start_date:%Y-%m-%d} to {end_date:%Y-%m-%d}'
+        elif days_param == 'all':
+            start_date = None
+            end_date = None
             period_label = 'All Time'
         else:
-            days = int(days_param)
-            start_date = timezone.now() - timedelta(days=days)
-            readings = SensorReading.objects.filter(
-                device__farm=farm,
-                timestamp__gte=start_date
-            ).select_related('device').order_by('timestamp')
-            period_label = f'Last {days} days'
-        
-        # Get all devices for this farm
-        devices = Device.objects.filter(farm=farm)
-        
-        # Group data by sensor/device
+            try:
+                days = int(days_param)
+            except (ValueError, TypeError):
+                days = 7
+            start_date = now - timedelta(days=days)
+            end_date = None
+            if days < 1:
+                hours = max(int(float(days_param) * 24), 1)
+                period_label = f'Last {hours} hours'
+            else:
+                period_label = f'Last {days} day{"s" if days != 1 else ""}'
+
+        # ── 2. Query readings ──────────────────────────────────
+        qs = SensorReading.objects.filter(device__farm=farm).select_related('device').order_by('timestamp')
+        if start_date:
+            qs = qs.filter(timestamp__gte=start_date)
+        if end_date:
+            qs = qs.filter(timestamp__lte=end_date)
+        readings = list(qs)
+
+        if not readings:
+            return Response({
+                'farm_name': farm.name if farm else 'All Farms',
+                'period': period_label,
+                'sensor_count': 0,
+                'sensors': [],
+                'timestamps': [],
+                'available_keys': [],
+            })
+
+        # ── 3. Group by device, keep ALL raw keys ─────────────
         sensors_data = {}
-        all_timestamps = []
-        
         for reading in readings:
-            device_id = reading.device_id
-            device_name = reading.device.name if reading.device else f'Sensor {device_id}'
-            
-            if device_id not in sensors_data:
-                sensors_data[device_id] = {
-                    'device_id': device_id,
-                    'device_name': device_name,
+            did = reading.device_id
+            if did not in sensors_data:
+                sensors_data[did] = {
+                    'device_id': did,
+                    'device_name': reading.device.name if reading.device else f'Sensor {did}',
                     'device_type': reading.device.device_type if reading.device else 'unknown',
                     'thingsboard_id': str(reading.device.thingsboard_id) if reading.device and reading.device.thingsboard_id else None,
                     'data': [],
-                    'keys': set()
+                    'keys': set(),
                 }
-            
-            # Use JSONField results directly
-            results = reading.results or {}
-            
-            # Track all available keys
-            sensors_data[device_id]['keys'].update(results.keys())
-            
-            # Extract values with flexible key names
-            temp = (results.get('temperature') or 
-                    results.get('temp') or 
-                    reading.temperature)
-            
-            moisture = (results.get('soilMoisture_%') or 
-                       results.get('soilMoisture_adc') or
-                       results.get('soilMoisture') or 
-                       results.get('soil_moisture') or 
-                       results.get('moisture') or 
-                       reading.moisture)
-            
-            humidity = results.get('humidity') or reading.humidity
-            
-            timestamp = reading.timestamp.isoformat() if reading.timestamp else None
-            
-            sensors_data[device_id]['data'].append({
-                'timestamp': timestamp,
-                'temperature': float(temp) if temp is not None else None,
-                'moisture': float(moisture) if moisture is not None else None,
-                'humidity': float(humidity) if humidity is not None else None,
-                'raw': results  # Include raw data for any other keys
-            })
-            
-            if timestamp and timestamp not in all_timestamps:
-                all_timestamps.append(timestamp)
-        
-        # Apply Kalman Filter to normalize data
-        for device_id, device_info in sensors_data.items():
-            # Initialize filters for each metric type with appropriate noise parameters
-            # R=Measure Noise (high=smooth), Q=Process Noise (low=stable)
-            kf_temp = KalmanFilter(R=5.0, Q=0.1)
-            kf_moist = KalmanFilter(R=15.0, Q=0.1) # Soil moisture sensors are often noisy
-            kf_hum = KalmanFilter(R=5.0, Q=0.1)
-            
-            # Process the time-series for this device
-            for entry in device_info['data']:
-                # Temperature Normalization
-                if entry.get('temperature') is not None:
-                    entry['temperature_normalized'] = round(kf_temp.filter(entry['temperature']), 2)
-                else:
-                    entry['temperature_normalized'] = None
-                    
-                # Moisture Normalization
-                if entry.get('moisture') is not None:
-                    entry['moisture_normalized'] = round(kf_moist.filter(entry['moisture']), 2)
-                else:
-                    entry['moisture_normalized'] = None
-                    
-                # Humidity Normalization
-                if entry.get('humidity') is not None:
-                    entry['humidity_normalized'] = round(kf_hum.filter(entry['humidity']), 2)
-                else:
-                    entry['humidity_normalized'] = None
 
-        # Convert sets to lists for JSON serialization
-        for device_id in sensors_data:
-            sensors_data[device_id]['keys'] = list(sensors_data[device_id]['keys'])
-            sensors_data[device_id]['reading_count'] = len(sensors_data[device_id]['data'])
-        
-        # Sort timestamps
-        all_timestamps.sort()
-        
-        # Build response
-        response_data = []
-        for device_id, device_info in sensors_data.items():
-            response_data.append(device_info)
-            
-        return Response({
-            'range': period_label, 
-            'devices': response_data,
-            'sensors': response_data, # Alias for dashboard compatibility
-            'timestamps': all_timestamps
-        })
-        combined_moisture = []
-        combined_temperature = []
-        combined_timestamps = []
-        
-        for reading in readings:
             results = reading.results or {}
-            temp = (results.get('temperature') or results.get('temp') or reading.temperature)
-            moisture = (results.get('soilMoisture_%') or results.get('soilMoisture_adc') or
-                       results.get('soilMoisture') or results.get('soil_moisture') or 
-                       results.get('moisture') or reading.moisture)
-            
-            if temp is not None:
-                combined_temperature.append(float(temp))
-            if moisture is not None:
-                combined_moisture.append(float(moisture))
-            combined_timestamps.append(reading.timestamp.isoformat() if reading.timestamp else None)
-        
+            sensors_data[did]['keys'].update(results.keys())
+
+            # Store every key as a numeric value (if castable)
+            point = {'timestamp': reading.timestamp.isoformat() if reading.timestamp else None}
+            for k, v in results.items():
+                try:
+                    point[k] = float(v)
+                except (ValueError, TypeError):
+                    point[k] = v  # keep string values for metadata
+            sensors_data[did]['data'].append(point)
+
+        # ── 4. Outlier removal (per-key IQR) ──────────────────
+        for did, info in sensors_data.items():
+            numeric_keys = [k for k in info['keys'] if k != 'timestamp']
+            for key in numeric_keys:
+                vals = [p.get(key) for p in info['data'] if isinstance(p.get(key), (int, float))]
+                if len(vals) < 4:
+                    continue
+                q1 = float(np.percentile(vals, 25))
+                q3 = float(np.percentile(vals, 75))
+                iqr = q3 - q1
+                lower = q1 - 3.0 * iqr
+                upper = q3 + 3.0 * iqr
+                for p in info['data']:
+                    v = p.get(key)
+                    if isinstance(v, (int, float)) and (v < lower or v > upper):
+                        p[key] = None  # remove outlier — chart will gap
+
+        # ── 5. Downsample if too many points ──────────────────
+        for did, info in sensors_data.items():
+            n = len(info['data'])
+            if n > self.MAX_CHART_POINTS:
+                step = max(1, n // self.MAX_CHART_POINTS)
+                info['data'] = info['data'][::step]
+
+        # ── 6. Kalman smoothing (per device per numeric key) ──
+        for did, info in sensors_data.items():
+            numeric_keys = [k for k in info['keys'] if k != 'timestamp']
+            kalman_filters = {}
+            for key in numeric_keys:
+                kalman_filters[key] = KalmanFilter(R=10.0, Q=0.1)
+
+            for point in info['data']:
+                for key in numeric_keys:
+                    raw = point.get(key)
+                    if isinstance(raw, (int, float)):
+                        point[f'{key}_kalman'] = round(kalman_filters[key].filter(raw), 2)
+                    else:
+                        point[f'{key}_kalman'] = None
+
+        # ── 7. Build flat timestamps list ─────────────────────
+        all_timestamps = sorted({p['timestamp'] for info in sensors_data.values() for p in info['data'] if p.get('timestamp')})
+
+        # ── 8. Serialise ──────────────────────────────────────
+        for did in sensors_data:
+            sensors_data[did]['keys'] = sorted(sensors_data[did]['keys'])
+            sensors_data[did]['reading_count'] = len(sensors_data[did]['data'])
+
+        response_data = list(sensors_data.values())
+
         return Response({
             'farm_name': farm.name if farm else 'All Farms',
             'period': period_label,
             'sensor_count': len(sensors_data),
-            'sensors': list(sensors_data.values()),
-            # Legacy format for backward compatibility
-            'moisture': combined_moisture,
-            'temperature': combined_temperature,
-            'timestamps': combined_timestamps,
-            'available_keys': list(set().union(*[set(s['keys']) for s in sensors_data.values()])) if sensors_data else []
+            'sensors': response_data,
+            'devices': response_data,
+            'timestamps': all_timestamps,
+            'available_keys': sorted({k for info in sensors_data.values() for k in info['keys']}),
         })
+
+    # ── helpers ────────────────────────────────────────────────
+    @staticmethod
+    def _parse_dt(val):
+        """Parse ISO string or epoch-ms to timezone-aware datetime."""
+        from django.utils import timezone as tz
+        try:
+            ms = int(val)
+            return datetime.fromtimestamp(ms / 1000, tz=tz.utc)
+        except (ValueError, TypeError):
+            pass
+        from django.utils.dateparse import parse_datetime, parse_date
+        dt = parse_datetime(val)
+        if dt:
+            return dt if dt.tzinfo else tz.make_aware(dt)
+        d = parse_date(val)
+        if d:
+            return tz.make_aware(datetime.combine(d, datetime.min.time()))
+        raise ValueError(f'Cannot parse date: {val}')
 
 
 class ThingsBoardTimeSeriesView(APIView):

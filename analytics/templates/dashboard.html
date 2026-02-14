@@ -724,25 +724,42 @@
         
         <!-- IoT Time Series Chart - Primary Focus -->
         <div class="card border-0 shadow-sm mb-4" id="iotChartCard">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <span>
-                    <i class="bi bi-graph-up text-success me-2"></i>
-                    Sensor Readings Over Time
-                </span>
-                <div>
-                    <select id="chartDays" class="form-select form-select-sm d-inline-block" style="width: auto;" onchange="loadSensorChart()">
-                        <option value="1">Last 24 hours</option>
-                        <option value="7" selected>Last 7 days</option>
-                        <option value="14">Last 14 days</option>
-                        <option value="30">Last 30 days</option>
-                        <option value="all">All Time</option>
-                    </select>
-                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="syncThingsBoard()">
-                        <i class="bi bi-cloud-arrow-down me-1"></i>Sync ThingsBoard
-                    </button>
-                    <button class="btn btn-sm btn-outline-success ms-1" onclick="loadIoTData()">
-                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                    </button>
+            <div class="card-header bg-white">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span>
+                        <i class="bi bi-graph-up text-success me-2"></i>
+                        Sensor Readings Over Time
+                    </span>
+                    <div class="d-flex align-items-center flex-wrap gap-2">
+                        <!-- Preset range selector -->
+                        <select id="chartDays" class="form-select form-select-sm" style="width: auto;" onchange="onRangePresetChange()">
+                            <option value="0.25">Last 6 Hours</option>
+                            <option value="0.5">Last 12 Hours</option>
+                            <option value="1">Last 24 Hours</option>
+                            <option value="3">Last 3 Days</option>
+                            <option value="7" selected>Last 7 Days</option>
+                            <option value="14">Last 14 Days</option>
+                            <option value="30">Last 30 Days</option>
+                            <option value="90">Last 90 Days</option>
+                            <option value="180">Last 6 Months</option>
+                            <option value="365">Last Year</option>
+                            <option value="all">All Time</option>
+                            <option value="custom">Custom Range…</option>
+                        </select>
+                        <!-- Custom date pickers (hidden by default) -->
+                        <div id="customDateRange" style="display:none;" class="d-flex align-items-center gap-1">
+                            <input type="date" id="chartStartDate" class="form-control form-control-sm" style="width:140px;">
+                            <span class="text-muted">to</span>
+                            <input type="date" id="chartEndDate" class="form-control form-control-sm" style="width:140px;">
+                            <button class="btn btn-sm btn-success" onclick="loadSensorChart()">Go</button>
+                        </div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="syncThingsBoard()">
+                            <i class="bi bi-cloud-arrow-down me-1"></i>Sync ThingsBoard
+                        </button>
+                        <button class="btn btn-sm btn-outline-success" onclick="loadIoTData()">
+                            <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="card-body">
@@ -754,7 +771,10 @@
                     <i class="bi bi-graph-up text-muted" style="font-size: 3rem; opacity: 0.3;"></i>
                     <p class="text-muted mt-2">No time series data available yet. Click "Sync ThingsBoard" to pull data.</p>
                 </div>
-                <canvas id="sensorChart" height="200"></canvas>
+                <div id="sensorChartWrap" style="position:relative; width:100%; height:300px; max-height:300px; overflow:hidden;">
+                    <canvas id="sensorChart"></canvas>
+                </div>
+                <div id="chartInfo" class="text-muted small mt-2 text-end"></div>
             </div>
         </div>
         
@@ -2238,211 +2258,214 @@
 
         // Load sensor time series chart
         let sensorChart = null;
-        const sensorColors = [
-            { border: 'rgb(54, 162, 235)', bg: 'rgba(54, 162, 235, 0.1)' },   // Blue
-            { border: 'rgb(255, 99, 132)', bg: 'rgba(255, 99, 132, 0.1)' },   // Red
-            { border: 'rgb(75, 192, 192)', bg: 'rgba(75, 192, 192, 0.1)' },   // Teal
-            { border: 'rgb(255, 159, 64)', bg: 'rgba(255, 159, 64, 0.1)' },   // Orange
-            { border: 'rgb(153, 102, 255)', bg: 'rgba(153, 102, 255, 0.1)' }, // Purple
-            { border: 'rgb(255, 205, 86)', bg: 'rgba(255, 205, 86, 0.1)' },   // Yellow
+
+        // Dynamic color palette — cycles for any number of keys
+        const PALETTE = [
+            { border: '#2196F3', bg: 'rgba(33,150,243,0.10)' },   // Blue
+            { border: '#F44336', bg: 'rgba(244,67,54,0.10)' },    // Red
+            { border: '#4CAF50', bg: 'rgba(76,175,80,0.10)' },    // Green
+            { border: '#FF9800', bg: 'rgba(255,152,0,0.10)' },    // Orange
+            { border: '#9C27B0', bg: 'rgba(156,39,176,0.10)' },   // Purple
+            { border: '#00BCD4', bg: 'rgba(0,188,212,0.10)' },    // Cyan
+            { border: '#795548', bg: 'rgba(121,85,72,0.10)' },    // Brown
+            { border: '#607D8B', bg: 'rgba(96,125,139,0.10)' },   // Blue-grey
+            { border: '#E91E63', bg: 'rgba(233,30,99,0.10)' },    // Pink
+            { border: '#CDDC39', bg: 'rgba(205,220,57,0.10)' },   // Lime
         ];
-        
+
+        function onRangePresetChange() {
+            const val = document.getElementById('chartDays').value;
+            document.getElementById('customDateRange').style.display = (val === 'custom') ? 'flex' : 'none';
+            if (val !== 'custom') loadSensorChart();
+        }
+
+        /**
+         * Smart label formatter: picks the right datetime format based on
+         * how much time the data spans.
+         */
+        function formatTimestamp(isoStr, spanMs) {
+            const d = new Date(isoStr);
+            if (isNaN(d)) return isoStr;
+            const HOUR = 3.6e6, DAY = 8.64e7;
+            if (spanMs <= DAY)          return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+            if (spanMs <= 3 * DAY)      return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+            if (spanMs <= 90 * DAY)     return d.toLocaleDateString([], {month:'short', day:'numeric'});
+            return d.toLocaleDateString([], {year:'numeric', month:'short', day:'numeric'});
+        }
+
         function loadSensorChart(farmId) {
             const daysSelect = document.getElementById('chartDays');
             const days = daysSelect ? daysSelect.value : '7';
             const chartLoader = document.getElementById('chartLoader');
             const chartNoData = document.getElementById('chartNoData');
             const canvas = document.getElementById('sensorChart');
-            
-            // Show loader
+            const chartInfo = document.getElementById('chartInfo');
+
             chartLoader.style.display = 'block';
             chartNoData.style.display = 'none';
             canvas.style.display = 'none';
-            
-            // Get farm ID from selector if not passed
-            if (!farmId) {
-                farmId = document.getElementById('farmSelect').value;
+            if (chartInfo) chartInfo.textContent = '';
+
+            if (!farmId) farmId = document.getElementById('farmSelect').value;
+
+            // Build URL
+            let url;
+            const base = farmId ? `/api/iot/timeseries/${farmId}/` : '/api/iot/timeseries/';
+            if (days === 'custom') {
+                const s = document.getElementById('chartStartDate').value;
+                const e = document.getElementById('chartEndDate').value;
+                if (!s || !e) { chartLoader.style.display = 'none'; return; }
+                url = `${base}?start=${s}&end=${e}`;
+            } else {
+                url = `${base}?days=${days}`;
             }
-            
-            let url = `/api/iot/timeseries/?days=${days}`;
-            if (farmId) url = `/api/iot/timeseries/${farmId}/?days=${days}`;
-            
+
             fetch(url)
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
                     chartLoader.style.display = 'none';
-                    
-                    // Check if we have sensor data
-                    const hasSensorData = data.sensors && data.sensors.length > 0 && 
+
+                    const hasSensorData = data.sensors && data.sensors.length > 0 &&
                                           data.sensors.some(s => s.data && s.data.length > 0);
-                    
-                    if (data.error || (!hasSensorData && (!data.timestamps || data.timestamps.length === 0))) {
+                    if (data.error || !hasSensorData) {
                         chartNoData.style.display = 'block';
                         canvas.style.display = 'none';
                         return;
                     }
-                    
+
                     chartNoData.style.display = 'none';
                     canvas.style.display = 'block';
                     const ctx = canvas.getContext('2d');
-                    
-                    if (sensorChart) {
-                        sensorChart.destroy();
-                    }
-                    
-                    // Determine label format based on time range
-                    const isShortRange = days === '1';
-                    const isAllTime = days === 'all';
-                    
-                    // Build datasets for each sensor
+                    if (sensorChart) sensorChart.destroy();
+
+                    // ── Compute time span for label formatting ──
+                    const allTs = data.sensors.flatMap(s => s.data.map(p => new Date(p.timestamp).getTime())).filter(t => !isNaN(t));
+                    const spanMs = allTs.length > 1 ? Math.max(...allTs) - Math.min(...allTs) : 8.64e7;
+
+                    // ── Build datasets dynamically from ALL keys ──
                     const datasets = [];
-                    
-                    if (data.sensors && data.sensors.length > 0) {
-                        // Multi-sensor mode: create separate lines for each sensor
-                        data.sensors.forEach((sensor, idx) => {
-                            const colorIdx = idx % sensorColors.length;
-                            const sensorName = sensor.device_name || `Sensor ${sensor.device_id}`;
-                            
-                            // Moisture dataset for this sensor
-                            const moistureData = sensor.data.map(d => d.moisture);
-                            if (moistureData.some(v => v !== null)) {
-                                datasets.push({
-                                    label: `${sensorName} - MoistureRaw (%)`,
-                                    data: moistureData,
-                                    borderColor: sensorColors[colorIdx].border,
-                                    backgroundColor: sensorColors[colorIdx].bg,
-                                    tension: 0.1, // Less tension for raw
-                                    fill: false,
-                                    pointRadius: isAllTime ? 1 : 2
-                                });
-                            }
+                    let colorIdx = 0;
+                    let totalPoints = 0;
 
-                            // Normalized Moisture
-                            const moistNorm = sensor.data.map(d => d.moisture_normalized);
-                            if (moistNorm.some(v => v !== null)) {
-                                datasets.push({
-                                    label: `${sensorName} - Moisture (Kalman)`,
-                                    data: moistNorm,
-                                    borderColor: sensorColors[colorIdx].border, // Same color
-                                    backgroundColor: 'transparent',
-                                    borderDash: [5, 5], // Dashed
-                                    tension: 0.4, // Smoother
-                                    pointRadius: 0,
-                                    borderWidth: 2
-                                });
-                            }
-                            
-                            // Temperature dataset for this sensor
-                            const tempData = sensor.data.map(d => d.temperature);
-                            if (tempData.some(v => v !== null)) {
-                                datasets.push({
-                                    label: `${sensorName} - TempRaw (°C)`,
-                                    data: tempData,
-                                    borderColor: sensorColors[(colorIdx + 1) % sensorColors.length].border,
-                                    backgroundColor: sensorColors[(colorIdx + 1) % sensorColors.length].bg,
-                                    tension: 0.1,
-                                    fill: false,
-                                    pointRadius: isAllTime ? 1 : 2
-                                });
-                            }
+                    data.sensors.forEach(sensor => {
+                        const name = sensor.device_name || `Sensor ${sensor.device_id}`;
+                        const rawKeys = sensor.keys || [];
 
-                            // Normalized Temperature
-                            const tempNorm = sensor.data.map(d => d.temperature_normalized);
-                            if (tempNorm.some(v => v !== null)) {
+                        // Use labels from this sensor's data
+                        // (all sensors share the same timeline after server downsample)
+                        const labels = sensor.data.map(p => formatTimestamp(p.timestamp, spanMs));
+
+                        rawKeys.forEach(key => {
+                            const values = sensor.data.map(p => {
+                                const v = p[key];
+                                return (typeof v === 'number') ? v : null;
+                            });
+                            // Skip if all null
+                            if (!values.some(v => v !== null)) return;
+
+                            const c = PALETTE[colorIdx % PALETTE.length];
+                            totalPoints += values.filter(v => v !== null).length;
+
+                            // Raw line
+                            datasets.push({
+                                label: `${name} — ${key}`,
+                                data: values,
+                                borderColor: c.border,
+                                backgroundColor: c.bg,
+                                tension: 0.2,
+                                fill: false,
+                                pointRadius: values.length > 300 ? 0 : 2,
+                                pointHoverRadius: 4,
+                                borderWidth: 2,
+                                spanGaps: false,
+                            });
+
+                            // Kalman-smoothed line (dashed, same colour)
+                            const kalmanKey = `${key}_kalman`;
+                            const kalmanVals = sensor.data.map(p => {
+                                const v = p[kalmanKey];
+                                return (typeof v === 'number') ? v : null;
+                            });
+                            if (kalmanVals.some(v => v !== null)) {
                                 datasets.push({
-                                    label: `${sensorName} - Temp (Kalman)`,
-                                    data: tempNorm,
-                                    borderColor: sensorColors[(colorIdx + 1) % sensorColors.length].border,
+                                    label: `${name} — ${key} (Kalman)`,
+                                    data: kalmanVals,
+                                    borderColor: c.border,
                                     backgroundColor: 'transparent',
-                                    borderDash: [5, 5],
+                                    borderDash: [6, 3],
                                     tension: 0.4,
                                     pointRadius: 0,
-                                    borderWidth: 2
+                                    borderWidth: 1.5,
+                                    spanGaps: true,
                                 });
                             }
+                            colorIdx++;
                         });
-                        
-                        // Use timestamps from first sensor with data
-                        var chartLabels = data.sensors[0].data.map(d => {
-                            const date = new Date(d.timestamp);
-                            if (isShortRange) {
-                                return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                            } else if (isAllTime) {
-                                return date.toLocaleDateString([], {month: 'short', day: 'numeric'});
-                            } else {
-                                return date.toLocaleDateString();
-                            }
-                        });
-                    } else {
-                        // Fallback: Legacy single-sensor mode
-                        var chartLabels = data.timestamps.map(t => {
-                            const d = new Date(t);
-                            if (isShortRange) {
-                                return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                            } else if (isAllTime) {
-                                return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
-                            } else {
-                                return d.toLocaleDateString();
-                            }
-                        });
-                        
-                        if (data.moisture && data.moisture.length > 0) {
-                            datasets.push({
-                                label: 'Soil Moisture (%)',
-                                data: data.moisture,
-                                borderColor: sensorColors[0].border,
-                                backgroundColor: sensorColors[0].bg,
-                                tension: 0.3,
-                                fill: true,
-                                pointRadius: isAllTime ? 1 : 2
-                            });
-                        }
-                        if (data.temperature && data.temperature.length > 0) {
-                            datasets.push({
-                                label: 'Temperature (°C)',
-                                data: data.temperature,
-                                borderColor: sensorColors[1].border,
-                                backgroundColor: sensorColors[1].bg,
-                                tension: 0.3,
-                                fill: true,
-                                pointRadius: isAllTime ? 1 : 2
-                            });
-                        }
-                    }
-                    
-                    // Show sensor count info
-                    const sensorCountInfo = data.sensor_count ? ` (${data.sensor_count} sensor${data.sensor_count > 1 ? 's' : ''})` : '';
-                    
+                    });
+
+                    // Use first sensor's timestamps for labels
+                    const firstSensor = data.sensors.find(s => s.data && s.data.length > 0);
+                    const chartLabels = firstSensor
+                        ? firstSensor.data.map(p => formatTimestamp(p.timestamp, spanMs))
+                        : [];
+
+                    const sensorCountInfo = data.sensor_count
+                        ? ` (${data.sensor_count} sensor${data.sensor_count > 1 ? 's' : ''})`
+                        : '';
+
                     sensorChart = new Chart(ctx, {
                         type: 'line',
                         data: {
                             labels: chartLabels,
-                            datasets: datasets.filter(ds => ds.data.length > 0)
+                            datasets: datasets.filter(ds => ds.data.length > 0),
                         },
                         options: {
                             responsive: true,
-                            interaction: {
-                                mode: 'index',
-                                intersect: false
-                            },
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            animation: { duration: 400 },
                             plugins: {
-                                legend: { position: 'bottom' },
+                                legend: {
+                                    position: 'bottom',
+                                    labels: { usePointStyle: true, padding: 8, font: { size: 10 }, boxWidth: 12 },
+                                },
                                 title: {
                                     display: true,
-                                    text: `${data.farm_name || 'Farm'} - ${data.period || 'Time Series'}${sensorCountInfo}`
-                                }
+                                    text: `${data.farm_name || 'Farm'} — ${data.period || 'Time Series'}${sensorCountInfo}`,
+                                    font: { size: 14, weight: 'bold' },
+                                },
+                                tooltip: {
+                                    backgroundColor: 'rgba(0,0,0,0.8)',
+                                    callbacks: {
+                                        label: function(ctx) {
+                                            if (ctx.parsed.y === null || ctx.parsed.y === undefined) return null;
+                                            return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`;
+                                        },
+                                    },
+                                },
                             },
                             scales: {
-                                y: { beginAtZero: false },
+                                y: {
+                                    beginAtZero: false,
+                                    grid: { color: 'rgba(0,0,0,0.06)' },
+                                },
                                 x: {
                                     ticks: {
-                                        maxTicksAuto: true,
-                                        maxRotation: 45
-                                    }
-                                }
-                            }
-                        }
+                                        maxRotation: 45,
+                                        autoSkip: true,
+                                        autoSkipPadding: 15,
+                                        font: { size: 10 },
+                                    },
+                                    grid: { display: false },
+                                },
+                            },
+                        },
                     });
+
+                    // Info bar
+                    if (chartInfo) {
+                        chartInfo.textContent = `${totalPoints.toLocaleString()} data points · ${data.available_keys ? data.available_keys.join(', ') : ''} · ${new Date().toLocaleTimeString()}`;
+                    }
                 })
                 .catch(err => {
                     document.getElementById('chartLoader').style.display = 'none';
