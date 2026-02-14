@@ -2302,28 +2302,57 @@
                             const moistureData = sensor.data.map(d => d.moisture);
                             if (moistureData.some(v => v !== null)) {
                                 datasets.push({
-                                    label: `${sensorName} - Moisture (%)`,
+                                    label: `${sensorName} - MoistureRaw (%)`,
                                     data: moistureData,
                                     borderColor: sensorColors[colorIdx].border,
                                     backgroundColor: sensorColors[colorIdx].bg,
-                                    tension: 0.3,
+                                    tension: 0.1, // Less tension for raw
                                     fill: false,
                                     pointRadius: isAllTime ? 1 : 2
                                 });
                             }
+
+                            // Normalized Moisture
+                            const moistNorm = sensor.data.map(d => d.moisture_normalized);
+                            if (moistNorm.some(v => v !== null)) {
+                                datasets.push({
+                                    label: `${sensorName} - Moisture (Kalman)`,
+                                    data: moistNorm,
+                                    borderColor: sensorColors[colorIdx].border, // Same color
+                                    backgroundColor: 'transparent',
+                                    borderDash: [5, 5], // Dashed
+                                    tension: 0.4, // Smoother
+                                    pointRadius: 0,
+                                    borderWidth: 2
+                                });
+                            }
                             
-                            // Temperature dataset for this sensor (use different shade)
+                            // Temperature dataset for this sensor
                             const tempData = sensor.data.map(d => d.temperature);
                             if (tempData.some(v => v !== null)) {
                                 datasets.push({
-                                    label: `${sensorName} - Temp (°C)`,
+                                    label: `${sensorName} - TempRaw (°C)`,
                                     data: tempData,
                                     borderColor: sensorColors[(colorIdx + 1) % sensorColors.length].border,
                                     backgroundColor: sensorColors[(colorIdx + 1) % sensorColors.length].bg,
-                                    tension: 0.3,
+                                    tension: 0.1,
                                     fill: false,
-                                    borderDash: [5, 5],  // Dashed line for temperature
                                     pointRadius: isAllTime ? 1 : 2
+                                });
+                            }
+
+                            // Normalized Temperature
+                            const tempNorm = sensor.data.map(d => d.temperature_normalized);
+                            if (tempNorm.some(v => v !== null)) {
+                                datasets.push({
+                                    label: `${sensorName} - Temp (Kalman)`,
+                                    data: tempNorm,
+                                    borderColor: sensorColors[(colorIdx + 1) % sensorColors.length].border,
+                                    backgroundColor: 'transparent',
+                                    borderDash: [5, 5],
+                                    tension: 0.4,
+                                    pointRadius: 0,
+                                    borderWidth: 2
                                 });
                             }
                         });

@@ -1,0 +1,62 @@
+# Use Ubuntu 24.04 as base
+FROM ubuntu:24.04 AS base
+
+# Prevent interactive prompts during install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Set working directory
+WORKDIR /app
+
+# Install apt dependencies (PostGIS, GDAL, GEOS, PROJ required by your Django GIS stack)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    libpq-dev \
+    libgdal-dev \
+    libgeos-dev \
+    libproj-dev \
+    gdal-bin \
+    curl \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set GDAL environment variables
+ENV GDAL_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libgdal.so
+ENV GEOS_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libgeos_c.so
+
+# Create a virtual environment and install Python dependencies first (cache layer)
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir gunicorn
+
+# Copy all project files
+COPY . .
+
+# Collect static files
+RUN python3 manage.py collectstatic --noinput || true
+
+# Create media directory
+RUN mkdir -p /app/media/uploads/satellite /app/media/uploads/drone \
+    /app/media/results/ndvi /app/media/results/ndwi
+
+# Expose port (matches your README access points)
+EXPOSE 8001
+
+# Set environment variables for production
+ENV PYTHONUNBUFFERED=1
+ENV DJANGO_SETTINGS_MODULE=farm_system.settings
+
+# Entrypoint script for migrations + server
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["gunicorn", "farm_system.wsgi:application", "--bind", "0.0.0.0:8001", "--workers", "3", "--timeout", "300"]

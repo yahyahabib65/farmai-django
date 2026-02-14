@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import AllowAny
+from django.db import models
 from django.shortcuts import get_object_or_404
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -19,6 +20,7 @@ import os
 import uuid
 import glob
 import tempfile
+import json
 from datetime import datetime, timedelta
 import random
 
@@ -949,14 +951,15 @@ class AnalyticsView(APIView):
             # Use GHG calculator if available, otherwise estimate from farm area
             from analytics.ghg_calculator import calculate_farm_emissions
             
-            farm_area_ha = float(farm.total_area) if farm.total_area else 10.0  # hectares
+            # Calculate total farm area from sum of field areas
+            farm_area_ha = sum(f.area_hectares or 0 for f in fields) or 10.0  # hectares
             
             try:
-                emissions_data = calculate_farm_emissions(farm)
-                total_emissions = emissions_data.get('total_emissions', farm_area_ha * 200)
-                carbon_sequestration = emissions_data.get('sequestration', farm_area_ha * 50)
-                fertilizer_emissions = emissions_data.get('fertilizer', farm_area_ha * 40)
-                fuel_emissions = emissions_data.get('fuel', farm_area_ha * 30)
+                emissions_data = calculate_farm_emissions(farm.id)
+                total_emissions = emissions_data.get('total_emissions_co2eq_kg', farm_area_ha * 200)
+                carbon_sequestration = emissions_data.get('total_sequestration_co2eq_kg', farm_area_ha * 50)
+                fertilizer_emissions = emissions_data.get('per_hectare_net_emissions_kg', farm_area_ha * 40) * farm_area_ha * 0.2
+                fuel_emissions = emissions_data.get('per_hectare_net_emissions_kg', farm_area_ha * 30) * farm_area_ha * 0.15
             except:
                 # Estimate based on typical values per hectare
                 total_emissions = round(farm_area_ha * 200, 0)  # ~200 kg CO2e per hectare

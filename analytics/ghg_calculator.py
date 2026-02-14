@@ -438,7 +438,7 @@ def calculate_field_ghg(field_id: int,
     latest_result = AnalyticsResult.objects.filter(
         field=field,
         avg_ndvi__isnull=False
-    ).order_by('-analysis_date').first()
+    ).order_by('-date').first()
     
     ndvi_mean = latest_result.avg_ndvi if latest_result else 0.5
     
@@ -471,3 +471,50 @@ def calculate_field_ghg(field_id: int,
     result['field_name'] = field.name
     
     return result
+
+
+def calculate_farm_emissions(farm_id: int) -> Dict:
+    """
+    Calculate aggregated GHG emissions for an entire farm.
+    """
+    from core.models import Farm, FieldBoundary
+    
+    try:
+        farm = Farm.objects.get(id=farm_id)
+    except Farm.DoesNotExist:
+        return {'error': f'Farm {farm_id} not found'}
+        
+    fields = FieldBoundary.objects.filter(farm=farm)
+    
+    total_emissions = 0
+    total_sequestration = 0
+    total_net = 0
+    total_area = 0
+    
+    field_results = []
+    
+    for field in fields:
+        # Calculate for each field using default estimates
+        result = calculate_field_ghg(field.id)
+        
+        if result and 'error' not in result:
+            field_results.append(result)
+            total_emissions += result.get('total_emissions_co2eq_kg', 0)
+            total_sequestration += result.get('total_sequestration_co2eq_kg', 0)
+            total_net += result.get('net_emissions_co2eq_kg', 0)
+            
+            # Get area from result info
+            field_info = result.get('field_info', {})
+            total_area += field_info.get('area_ha', 0)
+            
+    return {
+        'farm_id': farm.id,
+        'farm_name': farm.name,
+        'timestamp': datetime.now().isoformat(),
+        'total_area_ha': round(total_area, 2),
+        'total_emissions_co2eq_kg': round(total_emissions, 2),
+        'total_sequestration_co2eq_kg': round(total_sequestration, 2),
+        'net_emissions_co2eq_kg': round(total_net, 2),
+        'per_hectare_net_emissions_kg': round(total_net / total_area, 2) if total_area > 0 else 0,
+        'field_breakdown': field_results
+    }

@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from .models import SensorReading, WeatherData
 from .serializers import SensorReadingSerializer
+from .filters import KalmanFilter
 from .thingsboard_client import (
     ThingsBoardClient, FarmIoTManager, sync_farm_devices,
     login_thingsboard, get_device_keys, get_device_timeseries
@@ -349,6 +350,34 @@ class SensorTimeSeriesView(APIView):
             if timestamp and timestamp not in all_timestamps:
                 all_timestamps.append(timestamp)
         
+        # Apply Kalman Filter to normalize data
+        for device_id, device_info in sensors_data.items():
+            # Initialize filters for each metric type with appropriate noise parameters
+            # R=Measure Noise (high=smooth), Q=Process Noise (low=stable)
+            kf_temp = KalmanFilter(R=5.0, Q=0.1)
+            kf_moist = KalmanFilter(R=15.0, Q=0.1) # Soil moisture sensors are often noisy
+            kf_hum = KalmanFilter(R=5.0, Q=0.1)
+            
+            # Process the time-series for this device
+            for entry in device_info['data']:
+                # Temperature Normalization
+                if entry.get('temperature') is not None:
+                    entry['temperature_normalized'] = round(kf_temp.filter(entry['temperature']), 2)
+                else:
+                    entry['temperature_normalized'] = None
+                    
+                # Moisture Normalization
+                if entry.get('moisture') is not None:
+                    entry['moisture_normalized'] = round(kf_moist.filter(entry['moisture']), 2)
+                else:
+                    entry['moisture_normalized'] = None
+                    
+                # Humidity Normalization
+                if entry.get('humidity') is not None:
+                    entry['humidity_normalized'] = round(kf_hum.filter(entry['humidity']), 2)
+                else:
+                    entry['humidity_normalized'] = None
+
         # Convert sets to lists for JSON serialization
         for device_id in sensors_data:
             sensors_data[device_id]['keys'] = list(sensors_data[device_id]['keys'])
@@ -357,7 +386,17 @@ class SensorTimeSeriesView(APIView):
         # Sort timestamps
         all_timestamps.sort()
         
-        # Build legacy format for backward compatibility (combined data)
+        # Build response
+        response_data = []
+        for device_id, device_info in sensors_data.items():
+            response_data.append(device_info)
+            
+        return Response({
+            'range': period_label, 
+            'devices': response_data,
+            'sensors': response_data, # Alias for dashboard compatibility
+            'timestamps': all_timestamps
+        })
         combined_moisture = []
         combined_temperature = []
         combined_timestamps = []

@@ -37,7 +37,7 @@ FarmAI is an open-source precision agriculture framework designed for Pakistani 
 
 ---
 
-## ✅ Features by Goal
+## Features
 
 ### 1. Manual Data Management
 - CSV import/export for farms, fields, devices, assets
@@ -209,7 +209,7 @@ coverage report
 
 ---
 
-## 📈 ML Models
+## ML Models
 
 ### Irrigation Classifier
 - **Algorithm:** RandomForest (100 trees)
@@ -227,7 +227,7 @@ metrics = classifier.train(X, y, save_model=True)
 
 ---
 
-## 🌍 Pakistan-Specific Features
+## Pakistan-Specific Features
 
 - Default coordinates: LUMS, Lahore (31.47°N, 74.41°E)
 - LUMS IoT integration: icarus.lums.edu.pk
@@ -236,13 +236,13 @@ metrics = classifier.train(X, y, save_model=True)
 
 ---
 
-## 📝 License
+## License
 
 MIT License - Open Source
 
 ---
 
-## 👥 Contributors
+## Contributors
 
 - **Yahya Habib** - Developer
 - **Hassan Jaleel** - Supervisor
@@ -250,9 +250,8 @@ MIT License - Open Source
 
 ---
 
-## 🔗 References
+## References
 
 - [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/)
 - [ThingsBoard IoT Platform](https://thingsboard.io/)
 - [IPCC GHG Guidelines](https://www.ipcc-nggip.iges.or.jp/)
-- [Sentinel-2 User Guide](https://sentinel.esa.int/web/sentinel/user-guides/sentinel-2-msi)
